@@ -193,3 +193,19 @@ entry wins, and the metagross entry above wins on the chat budget.
 - Owner fields stay out of the model context (item 9).
 - Agent name: `pidgeot-agent` is proposed; the operator confirms it before F5 scaffolding (item 20).
 - LangSmith (item 15): if no LangSmith workspace exists by F5, the facade ships degraded and this file records it.
+
+## 2026-10-16 — Agent name confirmed; LangSmith available
+
+Closes alakazam open decisions 1 and 2; 3 and 4 were settled in the entry above.
+
+- Agent name (item 20): `pidgeot-agent`, picked by `ash`, the kit agent that names runtime agents (a real Pokémon
+  as `<pokemon>-agent`, no clash with kit agent names), and confirmed by the operator, as the kit requires. The
+  one-line rationale is in `docs/runbook.md`, since `README.md` is read-only.
+- LangSmith (item 15): a workspace exists, so F5 ships the facade enabled, not degraded. The key stays in the
+  operator's git-ignored `.env`; `.env.example` lists the variable names and the project value, never the key. The
+  deploy script writes the key to Secrets Manager with the AWS CLI, outside CloudFormation, and CDK only references
+  the secret, so the key never lands in a template; the agent function gets `LANGSMITH_API_KEY_SECRET_ARN`. A
+  missing key degrades tracing and never fails a turn.
+- §2: the kit agents in use are `arceus`, `metagross`, `alakazam` (agent and retrieval design), `ash` (agent
+  naming) and `slowking`; `evaluate-candidate-*` means `evaluate-candidate-intent`, `-product` and
+  `-implementation`, which `slowking` runs.
