@@ -209,3 +209,49 @@ Closes alakazam open decisions 1 and 2; 3 and 4 were settled in the entry above.
 - §2: the kit agents in use are `arceus`, `metagross`, `alakazam` (agent and retrieval design), `ash` (agent
   naming) and `slowking`; `evaluate-candidate-*` means `evaluate-candidate-intent`, `-product` and
   `-implementation`, which `slowking` runs.
+
+## 2026-10-17 — Synced with the frozen pipeline contract v1
+
+The pipeline froze contract v1 at its commit `de08901`; later changes there are additive only. This entry brings
+the plan in line with it (diff from this plan's baseline: `git diff 44c7fce de08901 -- docs/api-contract.md` in
+the pipeline repository). Where it differs from earlier text, this entry wins.
+
+- Pinning: the CRM pins the pipeline's committed `openapi.json` (normative; generated in the pipeline's first T7
+  commit) by commit and generates the `packages/pipeline-client` types from it; CI compares the pin with the served
+  `GET /v1/openapi.json` when `API_BASE` is set (metagross items 8, 21). `API_BASE` arrives with T7 in the
+  pipeline's runbook and PR body; the CRM copies it into its runbook, `.env.example` and PR.
+- Names (§6, §7): `/v1/search-centers` and `resolve_search_center` replace `/v1/places` and `resolve_place`. The
+  place box shows each match's `match_type` and asks which place was meant when no match is exact.
+- Search (§4): the map asks for `limit=500` (the REST default is 50). A center outside the county returns no rows
+  and an `area_note` ("outside Travis County"), which the UI shows.
+- Transport (§3, §4): error states show the `x-request-id` header, or `apigw-requestid` on gateway-generated
+  responses. Throttle numbers come from `/v1/meta.limits`, never hard-coded; `429` backs off 1 s, 2 s, 4 s on the
+  status code alone; `400 stale_cursor` restarts the list from the first page.
+- Roof age (§4): shown with its basis, confidence, anchor, as-of date and caveats. Only a completed primary roof
+  replacement resets it (else completed new construction, else year built) and issue dates never count; this
+  replaces §4's "two-tier rule".
+- Permits (§4, §7): `needs_review` (status or work class unmapped) is its own group and never counts as open.
+  Stalled permits show `open_duration_days` and `days_since_expiry`. The detail drawer lists the first 50 permits
+  with `permits_total` and pages the rest through `/v1/permits/search?property_id=`.
+- Contractor and BBB (§4, §7): the contractor is shown as printed (name, company, trade, phone) and labelled an
+  attribution, not a verified identity. §4's "no phones or emails" is about owners, whose roll has none; a
+  contractor's business phone printed on a public permit is shown. BBB shows the rating when `available`, "no BBB
+  profile" when `unavailable` and "blocked at source" when `blocked`, as it is in the current run.
+- Provenance (§4, §7): fields backed by `record_cid` and fields backed by `unpublished_source` (description, printed
+  status, contractor fields, `geo_id`, `owner_name` and others) are labelled separately; the latter are
+  source-backed, not CID-backed. Third-party text is rendered as plain text and reaches the model only as data,
+  never as instructions.
+- Footer (§7): `run.run_id`, the group CIDs (`groups.*.cid`) and `manifest_cid` from `/v1/meta`, plus `atlas`
+  once it is set.
+- Leads (§5): served permits always carry `property_id`, so every lead has one; `permit_id` is empty for a
+  property-only lead. The snapshot is one call per row: the permit, which embeds its property, or the property for
+  a property-only lead. Permit ids contain a space and are URL-encoded.
+- Agent (§6; alakazam items 8, 12, 17–19): tools mirror the frozen MCP registry's descriptions and input and output
+  schemas (`limit` 20, max 50; `open_permits` required on `search_properties`; one id on `get_property`; failures
+  returned as results with `{error, detail?, retry_after_seconds?, request_id}`). Requests take the pipeline chat's
+  bounds (20 messages, 4,000 characters each, 16,000 in total, the last from the user; `400` or `413`), replacing
+  item 12's numbers, plus `workspace_id`; an unavailable model is `503 agent_unavailable` with a reason. Responses
+  take the pipeline chat's shape (`outcome`, `answer` with `[[property:<id>]]`-style citations, `assumptions`,
+  `tool_calls`, server-built `evidence` checked against this turn's tool results, typed `limitations`, run, model
+  and prompt ids) plus `center_used` and `leads_created`; at the deadline the answer is `200` with
+  `outcome: "limit_reached"`.
