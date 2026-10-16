@@ -117,3 +117,79 @@ Public URL (no login), `API_BASE` it consumes, demo video recorded on that URL w
 transcript, `docs/runbook.md` (deploy from a clean clone, `.env.example`), `docs/slowking-self-assessment.md`,
 "how to review in two minutes", what is real vs unavailable, limitations, monthly cost. The URL stays up after
 submission.
+
+## 2026-10-16 — README.md is read-only; where review findings go
+
+- `README.md` is the assignment's problem statement and is never edited, by hand or by an agent. Where a kit
+  convention conflicts with it, the README wins and the deviation is recorded in this file.
+- §1: `API_BASE` is recorded in the PR description, `docs/runbook.md` and `.env.example` (§10), not in a README.
+- Kit reviews of this plan write their findings to `docs/reviews/<date>-<agent>.md` and edit nothing else.
+  Accepted findings enter this file as dated entries that link the review; rejected ones stay in the review.
+
+## 2026-10-16 — After the metagross review (`docs/reviews/2026-10-16-metagross.md`)
+
+All 28 items are accepted as classified there; their wording is part of this plan, amended as below. Where this
+entry and the review differ, this entry wins.
+
+- §2: five pieces replace the three increments: F1 find aged roofs, F2 permit signal and detail, F3 save leads,
+  F4 manage leads, F5 ask in natural language (item 26), each tracked in `docs/progress.md` (item 27).
+- §3, layout and API: pnpm + Turborepo (`apps/web`, `apps/api` with `cdk/` inside, `packages/api-client`,
+  `packages/pipeline-client`, `packages/shared`, `packages/tsconfig`); tRPC under `/api/trpc` with `httpLink` and no
+  batching, so each procedure keeps its route throttle (items 3–6).
+- §3, hosting: one CloudFront distribution, S3 for the app and the basemap, `/api/*` to the HTTP API, so the CRM
+  API is same-origin; `API_BASE` is passed once as CDK context (item 2). S3 + CloudFront instead of Amplify,
+  synchronous chat and email-first paging are justified deviations, for the reasons in items 1, 12 and 19.
+- §3, basemap: a Protomaps PMTiles extract of the Travis bounding box on the same bucket; CARTO only if the extract
+  cannot be produced in F1 (item 11). A repository script makes the extract and the deploy uploads it; the file is
+  not committed, and the runbook names the Protomaps build it came from.
+- §3, functions: two `NodejsFunction`s from one codebase, `leads` and `agent`, each shaped as in item 9 with its
+  own timeout, memory and reserved concurrency. Justified deviation from §3's one Lambda and the kit's single-Lambda
+  overview: a burst of chat turns cannot starve lead writes, and the AI SDK stays out of the CRUD cold start.
+- §3, chat budget: a 25 s handler deadline (Lambda timeout 29 s) under the HTTP API's 30 s integration cap, one
+  `AbortSignal` across model and pipeline calls, at most one retry, a partial answer when the budget runs out. This
+  replaces "a 30-second timeout and two retries" (item 13).
+- §3, model: `BEDROCK_MODEL_ID` defaults to `us.anthropic.claude-sonnet-5-5`, with Opus as the parameter flip; a
+  cost choice for a public endpoint. The Sonnet profile is confirmed in the account's inference profiles before F5.
+- §3, operations: the `project_name: roofing-crm` tag (item 10); pipeline-client timeouts and retries (item 14);
+  log retention and PII rules, named metrics and the alarm set (items 15, 16, 18); test layers and CI (item 21).
+  Deploys run only from the operator's machine; CI runs checks.
+- §5, lead key: partition key `workspace_id`, sort key `<property_id>#<permit_id>` (empty string for a missing
+  side); create is a conditional put and a repeated create returns the existing lead (item 22, adapted).
+  `workspace_id` is a ULID the browser keeps in local storage and sends with every lead call, so each visitor sees
+  only their own leads. It partitions, it does not authenticate, and clearing site data starts a new workspace.
+  The list is a paginated query on the workspace with filters applied in the Lambda; item 22's `by_status` index
+  is dropped.
+- §5, snapshot: the `leads` function fetches each lead's property and permit from the pipeline at create time and
+  never takes a snapshot from the client, so every snapshot carries the pipeline's `run_id`. `createMany` takes at
+  most 25 rows, fetches them with bounded concurrency inside the request deadline and reports each row as created,
+  existing or failed; a pipeline failure fails that row with the request id (§4). Item 7 is amended to match: the
+  CRM calls the pipeline from the agent's tools and from lead creation, and never proxies reads.
+- §10: the deliverables add `docs/intent.md`, `docs/progress.md`, `docs/metrics.md` and `docs/reviews/` (item 28).
+- Contract names (item 8): the rule is accepted. The renames land in one entry that syncs this file with the
+  pipeline contract once its v1 freezes, since the pipeline's own reviews may still change it.
+- Not applicable, as reasoned in the review: items 17, 20, 23, 24, 25.
+
+## 2026-10-16 — After the alakazam review (`docs/reviews/2026-10-16-alakazam.md`)
+
+All 25 items are accepted as classified there, amended as below. Where this entry and the review differ, this
+entry wins, and the metagross entry above wins on the chat budget.
+
+- §6: the taxonomy sentence is replaced by item 1's wording: grounded generation over operational records, with
+  structured and lexical retrieval through the pipeline's tools; the kit's vector step is omitted, and that is
+  recorded. The CRM builds no index (item 2, README override).
+- Semantic leg (item 3) and contractor search (item 24): nothing is requested from the pipeline now. Both proposals
+  in the review are optional and nullable, which the contract accepts after its v1 freeze, so neither is on the
+  critical path. If the pipeline adds a semantic or hybrid mode (its own alakazam review decides that for its
+  agent), the CRM agent adopts it; until then the omission is a recorded deviation for item 3's reasons, and a
+  question that names a contractor is answered as not supported yet.
+- Tool names: item 18's renames land with the contract sync (metagross entry); its two added tools stand.
+- Budget: items 13 and 23 work within the metagross entry's 25 s deadline, not 30 s.
+- Increments: "increment 3" in items 7 and 15 means F5.
+- Workspace: the chat request carries `workspace_id`, and `list_leads` and `create_lead` act only on that
+  workspace (item 17 amended).
+- Fixtures (items 6, 7): recorded pipeline responses are a copy of county data, which §1 and §8 keep out of the
+  branch. A script captures them into a git-ignored folder; the golden question set (questions and expected tool
+  calls, no data) is committed; the replay runs locally and against the live API after each deploy.
+- Owner fields stay out of the model context (item 9).
+- Agent name: `pidgeot-agent` is proposed; the operator confirms it before F5 scaffolding (item 20).
+- LangSmith (item 15): if no LangSmith workspace exists by F5, the facade ships degraded and this file records it.
