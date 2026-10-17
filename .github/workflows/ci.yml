@@ -1,0 +1,61 @@
+# Checks only (metagross item 21; decisions.md 2026-10-16). Nothing here deploys: deploys run from the
+# operator's machine with `pnpm deploy:aws`. No AWS credentials or secrets are used.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main, assignment]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  TURBO_TELEMETRY_DISABLED: '1'
+  # cdk synth needs no account; skip the EC2 metadata lookup a runner would otherwise wait on.
+  AWS_EC2_METADATA_DISABLED: 'true'
+
+jobs:
+  checks:
+    name: Format, lint, typecheck, test, build, cdk synth, contract pin
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0 (version from packageManager)
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm format:check
+      - run: pnpm lint
+      - run: pnpm typecheck
+      - run: pnpm test
+      - run: pnpm build
+      - name: cdk synth (no deploy inputs, no credentials)
+        run: pnpm synth
+      - name: Pipeline contract pin (snapshot and generated types)
+        run: pnpm --filter @roofing-crm/pipeline-client check:pin
+
+  served-contract:
+    name: Served pipeline contract matches the pin
+    # Runs once the repository variable PIPELINE_API_BASE holds the pipeline's API_BASE (after its T7).
+    if: ${{ vars.PIPELINE_API_BASE != '' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @roofing-crm/pipeline-client check:served
+        env:
+          PIPELINE_API_BASE: ${{ vars.PIPELINE_API_BASE }}

@@ -1,0 +1,38 @@
+{
+  "name": "@roofing-crm/web",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --configLoader runner",
+    "build": "vite build --configLoader runner",
+    "preview": "vite preview --configLoader runner",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run --configLoader runner"
+  },
+  "dependencies": {
+    "@protomaps/basemaps": "^5.7.0",
+    "@roofing-crm/shared": "workspace:*",
+    "maplibre-gl": "^6.13.0",
+    "pmtiles": "^4.5.0",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "zod": "^4.1.0"
+  },
+  "devDependencies": {
+    "@roofing-crm/tsconfig": "workspace:*",
+    "@testing-library/dom": "^10.4.0",
+    "@testing-library/jest-dom": "^7.0.0",
+    "@testing-library/react": "^16.3.0",
+    "@testing-library/user-event": "^14.6.0",
+    "@types/geojson": "^7946.0.16",
+    "@types/node": "^22.20.0",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "@vitejs/plugin-react": "^5.1.0",
+    "jsdom": "^29.0.0",
+    "typescript": "~5.9.3",
+    "vite": "^7.3.0",
+    "vitest": "^4.1.0"
+  }
+}

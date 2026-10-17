@@ -1,2 +1,19 @@
 *.DS_Store
 *.env
+.env.*
+!.env.example
+
+# dependencies and build output
+node_modules/
+dist/
+coverage/
+.turbo/
+*.tsbuildinfo
+
+# CDK
+cdk.out/
+cdk-outputs.json
+
+# Basemap extract, fonts and sprites (made by `pnpm basemap`, uploaded by the deploy; never committed)
+basemap/
+

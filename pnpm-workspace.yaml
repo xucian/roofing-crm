@@ -1,0 +1,10 @@
+packages:
+  - apps/*
+  - packages/*
+
+# Supply-chain guard: resolve only versions published at least 7 days ago (minutes).
+minimumReleaseAge: 10080
+
+# pnpm 10 runs no dependency install scripts unless listed here.
+onlyBuiltDependencies:
+  - esbuild

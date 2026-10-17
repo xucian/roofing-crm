@@ -1,0 +1,7 @@
+{
+  "extends": "@roofing-crm/tsconfig/node.json",
+  "compilerOptions": {
+    "lib": ["ES2023", "DOM"]
+  },
+  "include": ["cdk/**/*.ts"]
+}

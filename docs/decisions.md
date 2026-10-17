@@ -255,3 +255,76 @@ the pipeline repository). Where it differs from earlier text, this entry wins.
   `tool_calls`, server-built `evidence` checked against this turn's tool results, typed `limitations`, run, model
   and prompt ids) plus `center_used` and `leads_created`; at the deadline the answer is `200` with
   `outcome: "limit_reached"`.
+
+## 2026-10-17 — F1 built ahead of the pipeline's T7; what waits for it
+
+The pipeline is at `f35d7e8`: its contract is frozen at `de08901`, but T7, which commits `openapi.json` and publishes
+`API_BASE`, has not started (it follows T6). F1 is built only where it does not depend on that file and stays
+`prepared` in `docs/progress.md`. Nothing is typed from the contract prose, and no Travis data is mocked, recorded or
+bundled.
+
+- **Built now.** The workspace (pnpm 10 and Turborepo: `apps/web`, `apps/api` with `cdk/` only, `packages/pipeline-client`,
+  `packages/shared`, `packages/tsconfig`); the map shell (Austin default, pin drop and drag, GPS, radius 0.1 to 25 miles,
+  strict age threshold, clustered results layer, legend, URL state, disabled sections, footer); the pipeline client's
+  transport and error model; the pin, generate and check tooling; the stack (S3 and CloudFront, `config.json`, security
+  headers, basemap); `pnpm basemap`; `pnpm deploy:aws`; CI (item 21).
+- **Waits for T7** (the pinned `openapi.json` and `API_BASE`): the generated types; the typed calls to `/v1/meta` and
+  `/v1/properties/search`; list rows with match reasons, roof-age basis, confidence, anchor, as-of date and caveats,
+  coordinates and source; "N matches, showing M" with paging and the `stale_cursor` restart; markers from the first 500
+  rows; the `area_note` notice; the footer's run id, group CIDs and manifest CID; the error state with the request id;
+  the first deploy and the operator's check. `docs/progress.md` lists these as F1's remaining steps.
+- **Pin mechanics** (2026-10-17 entry). `packages/pipeline-client/openapi.pin.json` holds the pipeline repository, commit,
+  path and sha256, all null until T7. `pnpm --filter @roofing-crm/pipeline-client pin <commit> <path>` reads the bytes at
+  that commit (`git show` in a local clone, else the raw GitHub URL), checks that they are OpenAPI 3.1, commits them as
+  `openapi/openapi.json` and generates `src/generated/pipeline-api.ts` with openapi-typescript; calls go through
+  openapi-fetch over the package's transport. CI fails when the snapshot's sha256 or the generated file drifts and, once
+  the repository variable `PIPELINE_API_BASE` is set, when the served `GET /v1/openapi.json` differs from the pin. Zod
+  schemas from the same pin are generated when a runtime consumer needs them (F5's tools); F1 needs compile-time types
+  only, so appendix A's "Zod" for this package waits until then.
+- **Transport** (items 7, 14; pipeline decisions §21). A 15 s timeout per attempt in the browser (8 s for the Lambda
+  later), covering the body; `429` backs off 1 s, 2 s, 4 s on the status alone and ignores `Retry-After`; a request with no
+  readable response is treated the same way, because in a browser a gateway `429` without CORS headers looks like a
+  network error; a 5xx or a timeout is retried once after a full-jitter delay under 1 s, for GET only; 400, 404 and 413 are
+  never retried; every failure carries `x-request-id`, else `apigw-requestid`, else the body's `request_id`.
+- **F1 asks for aged roofs only** (`open_permits=false`). F2 adds the open-permit toggle, on by default as §4 says; until
+  then the result set is roofs older than the threshold.
+- **SPA routing** is a viewer-request CloudFront Function on the app behaviour, replacing item 2's distribution-wide 403/404
+  to `/index.html`: those apply to every behaviour, so they would turn a missing basemap object, and F3's `/api/*` errors,
+  into `index.html` with status 200.
+- **Basemap.** The PMTiles extract is produced in F1, so CARTO is not used (item 11). Glyphs and sprites are self-hosted
+  beside it for the same reason: protomaps/basemaps-assets at `028c18f`, all four font stacks the light style can request,
+  including the Devanagari stack its label expression names. `pnpm basemap` runs the `pmtiles` CLI or the pinned
+  `protomaps/go-pmtiles:v1.31.2` image, takes the newest daily build unless `--build` names one, and records build, box,
+  zoom and sha256 in `basemap/SOURCE.json`, which is uploaded with it; the runbook names the deployed build.
+- **Hosting.** The CSP is built from the pipeline origin (`connect-src 'self' <API_BASE origin>`, MapLibre 6's module worker
+  same-origin, no `unsafe-*`), with HSTS and `Permissions-Policy: geolocation=(self)`. Hashed bundles are immutable for a
+  year and kept across deploys; `index.html`, `favicon.svg` and `config.json` are revalidated and invalidated per deploy;
+  `basemap/*` is served uncompressed and cached for 7 days. The bucket holds build output only and is retained on stack
+  deletion; the stack has termination protection; the deployment helper's log group keeps 90 days (item 15, applied to
+  the one Lambda F1 creates).
+- **Deploy inputs.** CDK context `pipelineApiBase` and `basemapDir`; `pnpm deploy:aws` passes them with
+  `requireDeployInputs=true`, refuses while the pin is pending or the served contract differs from it, shows the AWS
+  identity and stops on a missing CDK bootstrap. CI synthesizes without them; `config.json` then says `null` and the app
+  shows "Pipeline API not configured". `.env.example` lists `PIPELINE_API_BASE` without a value: the operator's brief of
+  2026-10-17 limits that file to names, so the value goes to the runbook and the PR, replacing the 2026-10-17 entry's
+  ".env.example" for it.
+- **GPS** (§4). Each press asks the browser for a fresh fix, since a cached one keeps a place the user has left. A fix
+  outside the map's box keeps the current center (Austin at start) and says so; inside the box, the search's `area_note`
+  decides once T7 lands.
+- **Toolchain.** TypeScript 5.9, because openapi-typescript needs TypeScript 5 and typescript-eslint stops below 6.1;
+  MapLibre 6, the maintained line, with its module worker emitted as a same-origin `.js` asset; React 19, Vite 7, Vitest 4,
+  ESLint 10 run once from the root config, CDK 2.273. pnpm resolves only versions at least seven days old
+  (`minimumReleaseAge`), and CI pins its actions by commit. Vite loads its config with `--configLoader runner` so the
+  config can import the TypeScript workspace package `@roofing-crm/shared`. All packages use bundler module resolution,
+  since nothing runs TypeScript on bare Node. Turborepo's `agentGuidance` is off, so `turbo` does not re-create the
+  `AGENTS.md` the operator removed in `b88fb22`.
+- **`apps/api`** holds only `cdk/` until F3 adds the tRPC Lambda. F1's stack has no HTTP API, function or table, and the
+  `/api/*` behaviour arrives with F3.
+- **Open for the operator.** The place box (§7 and the 2026-10-17 entry) is in none of item 26's pieces. Proposal: add it
+  to F1's post-T7 work, since it centers the map and is typed by the same pin. Until a dated entry decides, it is not built.
+
+## 2026-10-17 — Place box joins F1
+
+The operator accepted the proposal above: the place box (§7) is part of F1's post-T7 work. It calls
+`/v1/search-centers` through the pinned client, moves the center to the chosen match, shows its `match_type` and
+asks which place was meant when no match is exact (2026-10-17 sync entry).

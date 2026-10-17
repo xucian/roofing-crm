@@ -1,0 +1,12 @@
+# README.md is the assignment text and is never rewritten; docs keep their own wrapping.
+*.md
+pnpm-lock.yaml
+**/dist
+**/cdk.out
+**/coverage
+**/.turbo
+basemap
+cdk-outputs.json
+# Pinned pipeline contract: kept byte-identical to the pipeline's commit; generated types are compared byte for byte.
+packages/pipeline-client/openapi
+packages/pipeline-client/src/generated
