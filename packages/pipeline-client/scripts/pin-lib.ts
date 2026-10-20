@@ -17,6 +17,12 @@ export const PinSchema = z
   .object({
     $comment: z.string().optional(),
     repository: z.url({ protocol: /^https$/ }),
+    /** The pipeline deployment the CRM calls (its API_BASE); PIPELINE_API_BASE overrides it. */
+    apiBase: z
+      .url({ protocol: /^https$/ })
+      .refine((value) => !value.endsWith('/') && !/[?#]/.test(value), {
+        message: 'apiBase is an https URL without a trailing slash, query or fragment',
+      }),
     contractFrozenAt: z.string().regex(/^[0-9a-f]{7,40}$/),
     commit: hex(40).nullable(),
     path: z

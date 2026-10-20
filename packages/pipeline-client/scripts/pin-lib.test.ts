@@ -13,6 +13,7 @@ import {
 
 const pending = {
   repository: 'https://github.com/xucian/oracle-property-intelligence-platform-pipeline-travis-tx',
+  apiBase: 'https://abc123.execute-api.us-east-2.amazonaws.com',
   contractFrozenAt: 'de08901',
   commit: null,
   path: null,
@@ -38,9 +39,21 @@ describe('PinSchema', () => {
     expect(PinSchema.safeParse({ ...set, path: '/etc/openapi.json' }).success).toBe(false);
   });
 
+  it('requires apiBase as an https URL without a trailing slash', () => {
+    const withoutApiBase: Partial<SetPin> = { ...set };
+    delete withoutApiBase.apiBase;
+    expect(PinSchema.safeParse(withoutApiBase).success).toBe(false);
+    expect(PinSchema.safeParse({ ...set, apiBase: 'http://abc123.example.org' }).success).toBe(
+      false,
+    );
+    expect(PinSchema.safeParse({ ...set, apiBase: `${set.apiBase}/` }).success).toBe(false);
+    expect(PinSchema.safeParse({ ...set, apiBase: `${set.apiBase}?stage=1` }).success).toBe(false);
+  });
+
   it('parses the committed pin file', () => {
     const pin = readPin();
     expect(pin.contractFrozenAt).toBe('de08901');
+    expect(pin.apiBase).toMatch(/^https:\/\/[a-z0-9]+\.execute-api\.us-east-2\.amazonaws\.com$/);
     expect(parsePin(JSON.stringify(pin))).toEqual(pin);
   });
 });

@@ -24,12 +24,15 @@ export interface PropertySearch {
   state: ResultsState;
   /** Fetches the next page into the list through `next_cursor`. */
   loadMore: () => void;
+  /** Runs the current search again at once, after a failure the transport did not retry. */
+  retry: () => void;
 }
 
 /**
  * Runs the map's search against the pipeline: on load at once, then after each change settles.
  * A newer search cancels the older one. "Load more" pages through `next_cursor`, and a stale cursor
- * (the pipeline redeployed, or the day changed) restarts the list from its first page.
+ * (the pipeline redeployed, or the day changed) restarts the list from its first page. A slow failure
+ * is not retried by the transport; the user retries it (pipeline decisions §31).
  */
 export function usePropertySearch(
   client: PipelineClient | null,
@@ -41,9 +44,12 @@ export function usePropertySearch(
   const key = queryKey(toPropertyQuery(search));
   const query = useMemo(() => JSON.parse(key) as PropertySearchQuery, [key]);
   const [state, dispatch] = useReducer(resultsReducer, INITIAL_RESULTS);
-  const [restarts, setRestarts] = useState(0);
+  const [reruns, setReruns] = useState(0);
   const runs = useRef(0);
   const started = useRef(false);
+  /** The next run starts without the debounce: a retry or a restart. */
+  const rerunPending = useRef(false);
+  /** The next run restarts the list after a stale cursor, and says so. */
   const restartPending = useRef(false);
   const moreController = useRef<AbortController | null>(null);
   const answered = useEffectEvent((data: PropertySearchResponse) => {
@@ -53,12 +59,13 @@ export function usePropertySearch(
   useEffect(() => {
     if (!client) return undefined;
     const controller = new AbortController();
-    const immediate = !started.current || restartPending.current;
+    const immediate = !started.current || rerunPending.current;
     const timer = window.setTimeout(
       () => {
         started.current = true;
         const restarted = restartPending.current;
         restartPending.current = false;
+        rerunPending.current = false;
         runs.current += 1;
         const run = runs.current;
         dispatch({ type: 'start', run, key, at: Date.now(), restarted });
@@ -79,7 +86,7 @@ export function usePropertySearch(
       controller.abort();
       moreController.current?.abort();
     };
-  }, [client, key, query, restarts]);
+  }, [client, key, query, reruns]);
 
   const view = viewFor(state, key);
 
@@ -100,7 +107,8 @@ export function usePropertySearch(
         if (controller.signal.aborted) return;
         if (isStaleCursor(error)) {
           restartPending.current = true;
-          setRestarts((count) => count + 1);
+          rerunPending.current = true;
+          setReruns((count) => count + 1);
           return;
         }
         dispatch({ type: 'moreFailed', run, error });
@@ -108,5 +116,10 @@ export function usePropertySearch(
     );
   };
 
-  return { view, state, loadMore };
+  const retry = (): void => {
+    rerunPending.current = true;
+    setReruns((count) => count + 1);
+  };
+
+  return { view, state, loadMore, retry };
 }

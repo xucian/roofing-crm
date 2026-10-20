@@ -1,6 +1,7 @@
 import type { PipelineClient, SearchCenter } from '@roofing-crm/pipeline-client';
 import { useEffect, useRef, useState } from 'react';
 import { ErrorDetails } from '../app/ErrorDetails';
+import { WakeHint } from '../app/WakeHint';
 import { choosePlace, describePlace } from './place-choice';
 
 type PlaceState =
@@ -96,6 +97,7 @@ export function PlaceBox({ client, centered, onChoose }: PlaceBoxProps) {
         </div>
       </form>
 
+      {state.status === 'searching' ? <WakeHint what="lookup" /> : null}
       {state.status === 'chosen' && centered ? (
         <p className="field-hint" role="status">
           Centered on {describePlace(state.center)}.

@@ -155,7 +155,7 @@ describe('429 back-off on the status code alone', () => {
   });
 });
 
-describe('5xx and timeouts retry once', () => {
+describe('a fast 5xx retries once; timeouts and slow failures do not (pipeline decisions §31)', () => {
   it('retries a 500 once after a jittered delay', async () => {
     routes.set('/flaky', (_req, res, hit) => {
       if (hit === 1)
@@ -183,15 +183,16 @@ describe('5xx and timeouts retry once', () => {
     expect(error).toMatchObject({ kind: 'http', status: 502, attempts: 2, requestId: 'gw-502' });
   });
 
-  it('times out a silent server, retries once, then fails as a timeout', async () => {
+  it('times out a silent server once and does not retry', async () => {
     routes.set('/silent', () => {
       // never answers
     });
     const { pipelineFetch, retries } = harness(50);
     const error = await failure(pipelineFetch(`${base}/silent`));
     expect(error.kind).toBe('timeout');
-    expect(error.attempts).toBe(2);
-    expect(retries.map((event) => event.reason)).toEqual(['timeout']);
+    expect(error.attempts).toBe(1);
+    expect(retries).toEqual([]);
+    expect(hits.get('/silent')).toBe(1);
   });
 
   it('counts a stalled body against the timeout', async () => {
@@ -204,17 +205,25 @@ describe('5xx and timeouts retry once', () => {
     expect(error.kind).toBe('timeout');
   });
 
-  it('recovers when the retry answers in time', async () => {
-    routes.set('/slow-once', (_req, res, hit) => {
-      if (hit === 1) {
-        setTimeout(() => {
-          reply(res, 200, { late: true });
-        }, 300);
-      } else reply(res, 200, { ok: true });
+  it('does not retry a 5xx that came after the function ran for a while', async () => {
+    routes.set('/v1/slow-500', (_req, res) => {
+      reply(res, 503, { message: 'Service Unavailable' }, { 'apigw-requestid': 'gw-slow' });
     });
-    const { pipelineFetch } = harness(50);
-    const response = await pipelineFetch(`${base}/slow-once`);
-    expect(await response.json()).toEqual({ ok: true });
+    let clock = 0;
+    const delays: number[] = [];
+    const pipelineFetch = createPipelineFetch({
+      timeoutMs: 29_000,
+      sleep: (ms) => {
+        delays.push(ms);
+        return Promise.resolve();
+      },
+      // Each reading is 6 s after the last: the attempt took longer than FAST_FAILURE_MS.
+      now: () => (clock += 6000),
+    });
+    const error = await failure(pipelineFetch(`${base}/v1/slow-500`));
+    expect(error).toMatchObject({ kind: 'http', status: 503, attempts: 1, requestId: 'gw-slow' });
+    expect(delays).toEqual([]);
+    expect(hits.get('/v1/slow-500')).toBe(1);
   });
 });
 
@@ -288,7 +297,7 @@ describe('network failures and cancellation', () => {
     expect(delays).toEqual([1000, 2000, 4000]);
   });
 
-  it('retries a slow failure without a readable response once, like a 5xx', async () => {
+  it('does not retry a slow failure without a readable response', async () => {
     let clock = 0;
     const delays: number[] = [];
     const pipelineFetch = createPipelineFetch({
@@ -304,8 +313,8 @@ describe('network failures and cancellation', () => {
     });
     const error = await failure(pipelineFetch(`${base}/v1/properties/search`));
     expect(error.kind).toBe('network');
-    expect(error.attempts).toBe(2);
-    expect(delays).toEqual([500]);
+    expect(error.attempts).toBe(1);
+    expect(delays).toEqual([]);
   });
 
   it('does not send anything when the caller already aborted', async () => {

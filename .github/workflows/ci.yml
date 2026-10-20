@@ -44,8 +44,7 @@ jobs:
 
   served-contract:
     name: Served pipeline contract matches the pin
-    # Runs once the repository variable PIPELINE_API_BASE holds the pipeline's API_BASE (after its T7).
-    if: ${{ vars.PIPELINE_API_BASE != '' }}
+    # The deployment is `apiBase` in packages/pipeline-client/openapi.pin.json; nothing to configure here.
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -57,5 +56,3 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm --filter @roofing-crm/pipeline-client check:served
-        env:
-          PIPELINE_API_BASE: ${{ vars.PIPELINE_API_BASE }}

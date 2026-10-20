@@ -7,13 +7,14 @@ export type MetaState =
   | { status: 'failed'; error: unknown };
 
 /**
- * The pipeline's `/v1/meta`, read once `start` turns true. The app starts it after the first search
- * settles, so on a cold pipeline the map's search is first in the one-at-a-time queue.
+ * The pipeline's `/v1/meta`, read as soon as the page opens. It is the pipeline's cheapest call, so
+ * on an idle pipeline it pays the cold start, and the first search, queued behind it in the
+ * one-at-a-time queue, lands on the warm instance (pipeline decisions §31).
  */
-export function useMeta(client: PipelineClient | null, start: boolean): MetaState {
+export function useMeta(client: PipelineClient | null): MetaState {
   const [state, setState] = useState<MetaState>({ status: 'waiting' });
   useEffect(() => {
-    if (!client || !start) return undefined;
+    if (!client) return undefined;
     const controller = new AbortController();
     client.getMeta({ signal: controller.signal }).then(
       ({ data, requestId }) => {
@@ -26,6 +27,6 @@ export function useMeta(client: PipelineClient | null, start: boolean): MetaStat
     return () => {
       controller.abort();
     };
-  }, [client, start]);
+  }, [client]);
   return state;
 }

@@ -15,7 +15,7 @@ import {
 export interface LocalHostingOptions {
   /** The git-ignored output of `pnpm basemap`. */
   basemapDir: string;
-  /** PIPELINE_API_BASE from the environment; null config when absent. */
+  /** PIPELINE_API_BASE from the environment, else the pin file's apiBase; null config when absent. */
   pipelineApiBase: string | undefined;
 }
 

@@ -379,3 +379,78 @@ for the pipeline's "T7 correction live" notice. Where this entry differs from ea
   not part of the repository.
 - **Still open.** Bedrock access on this account was blocked on 2026-10-16. F5 checks it first, as the pipeline's T9
   does.
+
+## 2026-10-20 — Pipeline cold starts (pipeline decisions §31)
+
+The pipeline measured its cold starts and keeps no warm instance, because its README rules out ongoing cost. On an idle
+pipeline API the first call takes about 5 s, or 8 to 9 s right after a pipeline deploy or a long idle; later calls take
+0.6 to 3 s. Its letter of the same day asks for four things. This entry amends the entry above where they differ.
+
+- **`/v1/meta` first.** The page reads `/v1/meta` as soon as it opens. That call pays the cold start, and the default
+  search, queued behind it, lands on the warm instance. This replaces "read after the first search settles".
+- **Timeout stays 29 s, and timeouts are not retried.** The letter asks to raise the browser timeout from 15 s to 25 s.
+  It was already 29 s, and stays there: above the pipeline function's 25 s limit plus network time, so the browser never
+  abandons a request the pipeline is still running, and below API Gateway's 30 s cut. The letter's reasoning still
+  changes the retry rules: a request that timed out may still hold its instance, so an immediate retry only starts a
+  second cold one. From now on:
+  - Not retried automatically: a timeout, and any failure that took longer than 5 s (a 5xx after the function ran, or
+    no readable response).
+  - Retried once, after under 1 s: a 5xx that came back fast, such as the account-wide throttle's 503.
+  - Backed off 1 s, 2 s, then 4 s: a 429, and a fast failure with no readable response.
+
+  This amends metagross item 14 and the transport bullet above. A failed search shows "Try again".
+- **Say why it is slow.** After 3 s, a running search or place lookup adds: "The first search (lookup) after a quiet
+  period starts the pipeline's data service, which takes up to about 15 seconds." The seconds counter stays.
+- **F3 and F5 (recorded now, built with those pieces).** The CRM's own functions call the pipeline as the browser does.
+  Each chat turn (F5) and each lead-creation request (F3) first sends `GET /v1/meta`. Each pipeline call's timeout comes
+  from what remains of the 25 s handler deadline, up to about 20 s, instead of the fixed 8 s `LAMBDA_TIMEOUT_MS`.
+- **Served-contract check.** `check:served`, which CI's second job and `pnpm deploy:aws` both run, now waits 29 s
+  instead of 8 s. Its single `GET /v1/openapi.json` often pays the cold start, and since a timeout is no longer retried,
+  an 8 s limit would fail CI or stop a deploy after every pipeline deploy.
+
+## 2026-10-20 — The CRM deploys into the pipeline's AWS account
+
+The operator confirmed that the `RoofingCrm` stack goes into the pipeline's account: 561303652468, us-east-2, profile
+`cdk-lab`. As before, the operator runs every deploy. Consequences:
+
+- CDK is already bootstrapped there, since the pipeline deploys with CDK in us-east-2. The CRM's resources carry
+  `project_name=roofing-crm`, so their cost shows apart from the pipeline's. Stack names do not clash: the pipeline's are
+  `TravisApi` and `TravisWeb`.
+- The account's quotas apply to the CRM too: 3008 MB per function, and 10 concurrent Lambda executions shared by every
+  function in the account (an increase is requested).
+- **No reserved concurrency until the increase lands.** AWS keeps a minimum of the account's concurrency unreserved, so
+  with 10 in total nothing can be reserved. The pipeline's own decisions record the same finding for its chat function.
+  §3 and metagross item 9 give each CRM function (`leads`, `agent`) its own reserved concurrency. In F3 and F5 that waits
+  for the increase. Until then the HTTP API's route throttles alone bound the CRM's functions. This leaves the reason for
+  the two-function split (a burst of chat turns cannot starve lead writes) only partly met, and the split is kept, so
+  reservations can be added once the increase lands.
+- F1 adds no long-running function. Its only Lambda is CDK's bucket-deployment helper, which runs during a deploy.
+- Bedrock on this account was blocked on 2026-10-16. F5 checks it first. §3 keeps the contingency: the Anthropic provider
+  of the same SDK, with its key in Secrets Manager, recorded as a dated deviation.
+
+## 2026-10-20 — Pipeline T7 correction live; `API_BASE` is committed configuration
+
+The pipeline's letter of 2026-10-20 reports its T7 correction live, with T7 and T8 verified by its operator. `API_BASE`
+and contract v1 are unchanged: the served `/v1/openapi.json` still hashes to `7d8ece68…`, so the pin stands and F1's live
+check can go ahead.
+
+- **`API_BASE` is committed configuration.** It is `apiBase` in `packages/pipeline-client/openapi.pin.json`, next to the
+  contract that deployment must serve. CI's served-contract check, `pnpm deploy:aws` and `pnpm dev` read it there, and
+  `PIPELINE_API_BASE` in the environment overrides it for one run (a local pipeline, say). It is not a secret, and the
+  PR names it anyway. This replaces the operator's `.env` entry and the GitHub repository variable of the entries above:
+  CI's second job now runs on every push and PR, forks included, with nothing to set up. The deploy still hands it to
+  the stack as CDK context (metagross item 2); only where the script finds it changed.
+- **Measured times** (the letter): warm, F1's default search takes 0.3 s in the function and 1.6 to 1.7 s end to end,
+  mostly the 500-item response; on an idle API about 3 to 5 s; after a pipeline deploy or a long idle 8 to 9 s. Text
+  search is 1 to 1.5 s warm. The pipeline warms three instances after each of its deploys, and before a demo on request;
+  the demo video is recorded after asking for that.
+- **Timeout stays 29 s.** The letter repeats "25 s per attempt". The cold-start entry above keeps 29 s for the reason it
+  gives: the browser outlasts the pipeline function's 25 s limit, so it never abandons a request the pipeline is still
+  serving, and never retries a timeout.
+- **`GET /v1/properties/by-geo-id/{geo_id}`** now returns the lowest `property_id` when several accounts share a `geo_id`
+  (1,160 do); before, the pick was arbitrary. F2's drawer reads properties by `property_id` and is not affected. F5's
+  `get_property` tool takes either id, as the pipeline's MCP tool does, so a `geo_id` question now gets the same property
+  every time; the agent cites the `property_id` it received.
+- **`/v1/agent/chat`** answers `503 agent_unavailable` until the pipeline's T9. The CRM's agent is its own (§6) and calls
+  only the pipeline's query endpoints, so this changes nothing here.
+- **One pipeline call in flight** stays until the account's concurrency increase lands.

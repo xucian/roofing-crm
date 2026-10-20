@@ -3,6 +3,7 @@ import { formatCount, formatMatchSummary } from '@roofing-crm/shared';
 import { useEffect, useState } from 'react';
 import { Callout } from '../app/Callout';
 import { ErrorDetails } from '../app/ErrorDetails';
+import { WakeHint } from '../app/WakeHint';
 import { describeRetry } from '../pipeline/connection';
 import { PropertyRow } from './PropertyRow';
 import type { SearchResults } from './property-search';
@@ -36,7 +37,7 @@ export function ResultsPanel({
       {search === null ? (
         <Callout tone="warning" title="Pipeline API not configured">
           This deployment has no pipeline API base in /config.json, so no properties can be
-          searched. Deploy with PIPELINE_API_BASE set (docs/runbook.md).
+          searched. Deploy with pnpm deploy:aws, which sets it (docs/runbook.md).
         </Callout>
       ) : (
         <Results
@@ -58,7 +59,7 @@ function Results({
   selectedId,
   onSelect,
 }: ResultsPanelProps & { search: PropertySearch }) {
-  const { view, state, loadMore } = search;
+  const { view, state, loadMore, retry: searchAgain } = search;
   return (
     <>
       {retry ? (
@@ -75,6 +76,13 @@ function Results({
       {view.kind === 'failed' ? (
         <Callout tone="error" title="Search failed">
           <ErrorDetails error={view.error} />
+          <button
+            type="button"
+            className="button button--quiet callout-action"
+            onClick={searchAgain}
+          >
+            Try again
+          </button>
         </Callout>
       ) : null}
 
@@ -175,7 +183,7 @@ function ResultsList({
   );
 }
 
-/** The loading state: a cold pipeline can take several seconds, so the wait is counted. */
+/** The loading state: a cold pipeline can take several seconds, so the wait is counted and explained. */
 function Searching({ started }: { started: boolean }) {
   const [seconds, setSeconds] = useState(0);
   useEffect(() => {
@@ -194,12 +202,7 @@ function Searching({ started }: { started: boolean }) {
         <p className="results-loading-title">
           Searching the pipeline…{seconds > 0 ? ` ${String(seconds)} s` : null}
         </p>
-        {seconds >= 3 ? (
-          <p className="field-hint">
-            The first search after a quiet spell takes longer while the pipeline wakes up, often
-            around 10 seconds.
-          </p>
-        ) : null}
+        {started ? <WakeHint what="search" /> : null}
       </div>
     </div>
   );

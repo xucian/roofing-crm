@@ -44,6 +44,8 @@ export function App({ config }: { config: RuntimeConfig }) {
   );
   const client = connection?.client ?? null;
   const retry = useRetryEvent(connection?.retries ?? null);
+  // First in the queue, before the default search: /v1/meta takes the pipeline's cold start.
+  const meta = useMeta(client);
 
   // A GPS fix inside the map's box but outside the county: the server's area_note says so, and the
   // search goes back to the center it had (docs/decisions.md §4, 2026-10-17).
@@ -58,8 +60,7 @@ export function App({ config }: { config: RuntimeConfig }) {
     });
   };
   const propertySearch = usePropertySearch(client, search, onAnswer);
-  const { view, state } = propertySearch;
-  const meta = useMeta(client, state.results !== null || state.failure !== null);
+  const { view } = propertySearch;
 
   const shown =
     view.kind === 'ready' ? view.results : view.kind === 'loading' ? view.previous : null;

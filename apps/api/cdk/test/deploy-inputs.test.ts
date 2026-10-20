@@ -44,7 +44,7 @@ describe('readDeployInputs', () => {
         context({ webDistDir, basemapDir: fakeBasemap(), requireDeployInputs: 'true' }),
         '/',
       ),
-    ).toThrow(/PIPELINE_API_BASE/);
+    ).toThrow(/pipelineApiBase is required/);
     expect(() =>
       readDeployInputs(
         context({

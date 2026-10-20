@@ -80,8 +80,6 @@ export function describeRetry(event: RetryEvent): string {
       return `The pipeline API is busy (HTTP 429). ${wait}`;
     case 'server_error':
       return `The pipeline API answered HTTP ${String(event.status ?? '5xx')}. ${wait}`;
-    case 'timeout':
-      return `The pipeline API did not answer within ${formatSeconds(BROWSER_TIMEOUT_MS)}. ${wait}`;
     case 'network':
       return `The pipeline API could not be reached. ${wait}`;
   }

@@ -2,14 +2,15 @@
 //
 //   pnpm deploy:aws [--yes]
 //
-// PIPELINE_API_BASE comes from the environment or from the git-ignored .env; this script reads only that
-// variable from .env and prints nothing else from it. Steps: refuse without the pinned pipeline contract
-// -> check that the API serves that contract -> show the AWS identity and region -> check the CDK
-// bootstrap -> check the basemap -> build -> cdk deploy -> print the URL and the F1 link.
+// The pipeline API base is `apiBase` in packages/pipeline-client/openapi.pin.json (committed, not a
+// secret); PIPELINE_API_BASE in the environment overrides it. Nothing is read from .env. Steps: refuse
+// without the pinned pipeline contract -> check that the API serves that contract -> show the AWS
+// identity and region -> check the CDK bootstrap -> check the basemap -> build -> cdk deploy -> print
+// the URL and the F1 link.
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline/promises';
-import { parseArgs, parseEnv } from 'node:util';
+import { parseArgs } from 'node:util';
 import {
   DEFAULT_CENTER,
   RADIUS_MILES,
@@ -25,26 +26,30 @@ const BASEMAP_DIR = join(REPO_ROOT, 'basemap');
 const OUTPUTS_FILE = join(REPO_ROOT, 'cdk-outputs.json');
 const PIN_FILE = join(REPO_ROOT, 'packages/pipeline-client/openapi.pin.json');
 
-function pipelineApiBase(): string {
-  let value = process.env.PIPELINE_API_BASE;
-  const envFile = join(REPO_ROOT, '.env');
-  if (!value && existsSync(envFile)) {
-    value = parseEnv(readFileSync(envFile, 'utf8')).PIPELINE_API_BASE;
+interface PinFile {
+  apiBase?: string;
+  commit: string | null;
+}
+
+const readPinFile = (): PinFile => JSON.parse(readFileSync(PIN_FILE, 'utf8')) as PinFile;
+
+function pipelineApiBase(pin: PinFile): string {
+  const override = process.env.PIPELINE_API_BASE;
+  if (override !== undefined) {
+    console.log('PIPELINE_API_BASE is set and overrides apiBase in openapi.pin.json.');
   }
-  if (!value) {
-    fail(
-      'PIPELINE_API_BASE is not set. Copy it from the pipeline runbook (API_BASE) into .env or the environment.',
-    );
+  const value = override ?? pin.apiBase;
+  if (value === undefined) {
+    fail('packages/pipeline-client/openapi.pin.json has no apiBase (the pipeline API_BASE).');
   }
   try {
     return normalizePipelineApiBase(value);
   } catch (error) {
-    return fail(`PIPELINE_API_BASE: ${(error as Error).message}`);
+    return fail(`Pipeline API base: ${(error as Error).message}`);
   }
 }
 
-function requirePinnedContract(): void {
-  const pin = JSON.parse(readFileSync(PIN_FILE, 'utf8')) as { commit: string | null };
+function requirePinnedContract(pin: PinFile): void {
   if (pin.commit === null) {
     fail(
       'The pipeline contract pin is pending (packages/pipeline-client/openapi.pin.json): F1 cannot run before the pipeline commits openapi.json (its T7) and the client is generated from it.',
@@ -70,8 +75,9 @@ async function confirm(question: string): Promise<boolean> {
 async function main(): Promise<void> {
   const { values } = parseArgs({ options: { yes: { type: 'boolean', default: false } } });
 
-  requirePinnedContract();
-  const apiBase = pipelineApiBase();
+  const pin = readPinFile();
+  requirePinnedContract(pin);
+  const apiBase = pipelineApiBase(pin);
   console.log(`Pipeline API: ${apiBase}`);
   pnpm(['--filter', '@roofing-crm/pipeline-client', 'check:served'], {
     cwd: REPO_ROOT,

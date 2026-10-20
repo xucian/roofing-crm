@@ -113,7 +113,7 @@ const searchPage = (
 describe('App with the pipeline API', () => {
   const config = { pipelineApiBase: API_BASE };
 
-  it('runs the default search on load, then reads /v1/meta for the footer', async () => {
+  it('reads /v1/meta first, so the default search behind it lands on a warm pipeline', async () => {
     const calls = stubPipeline({
       '/v1/properties/search': () => ({
         ...searchPage([fixtureProperty(1), fixtureProperty(2)], 1200, 'c2'),
@@ -137,8 +137,8 @@ describe('App with the pipeline API', () => {
     expect(screen.getByText('2 data group CIDs')).toBeInTheDocument();
     expect(screen.getByText(/Atlas: not published yet/)).toBeInTheDocument();
 
-    expect(calls.map((url) => url.pathname)).toEqual(['/v1/properties/search', '/v1/meta']);
-    expect(Object.fromEntries(calls[0]!.searchParams)).toEqual({
+    expect(calls.map((url) => url.pathname)).toEqual(['/v1/meta', '/v1/properties/search']);
+    expect(Object.fromEntries(calls[1]!.searchParams)).toEqual({
       lat: '30.2672',
       lon: '-97.7431',
       radius_miles: '5',
@@ -198,6 +198,22 @@ describe('App with the pipeline API', () => {
     expect(screen.getByText('fixture detail')).toBeInTheDocument();
     expect(screen.getByText('req-bad')).toBeInTheDocument();
     expect(document.querySelector('.results-list')).toBeNull();
+  });
+
+  it('runs a failed search again on "Try again"', async () => {
+    stubPipeline({
+      '/v1/properties/search': (_url, call) =>
+        // A 400 is never retried by the transport, so the button is the only way to run it again.
+        call === 1
+          ? { status: 400, body: { error: 'invalid_params', request_id: 'req-first' } }
+          : searchPage([fixtureProperty(1)], 1, null),
+      '/v1/meta': () => ({ body: fixtureMeta() }),
+    });
+    render(<App config={config} />);
+    expect(await screen.findByText('Search failed')).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    expect(await screen.findByText('1 match')).toBeInTheDocument();
+    expect(screen.queryByText('Search failed')).not.toBeInTheDocument();
   });
 
   it('goes back to Austin when the server says a GPS fix is outside the county', async () => {

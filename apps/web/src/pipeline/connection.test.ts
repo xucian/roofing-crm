@@ -68,9 +68,6 @@ describe('describeRetry', () => {
     expect(describeRetry({ ...base, reason: 'server_error', delayMs: 300, status: 503 })).toBe(
       'The pipeline API answered HTTP 503. Retrying in 0.3 s…',
     );
-    expect(describeRetry({ ...base, reason: 'timeout', delayMs: 500 })).toBe(
-      'The pipeline API did not answer within 29 s. Retrying in 0.5 s…',
-    );
     expect(describeRetry({ ...base, reason: 'network', delayMs: 1000 })).toBe(
       'The pipeline API could not be reached. Retrying in 1 s…',
     );

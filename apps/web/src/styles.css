@@ -413,6 +413,10 @@ code {
   box-shadow: none;
 }
 
+.callout-action {
+  margin-top: 6px;
+}
+
 /* Place box */
 
 .place-box {

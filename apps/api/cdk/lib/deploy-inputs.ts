@@ -59,7 +59,7 @@ export function readDeployInputs(context: ContextReader, cwd: string): DeployInp
   }
   if (required && pipelineApiBase === null) {
     throw new Error(
-      'pipelineApiBase is required for a deploy: set PIPELINE_API_BASE (docs/runbook.md).',
+      'pipelineApiBase is required for a deploy: run pnpm deploy:aws, which passes apiBase from packages/pipeline-client/openapi.pin.json (docs/runbook.md).',
     );
   }
   if (required && basemapDir === null) {

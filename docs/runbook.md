@@ -5,22 +5,26 @@ Deploy from a clean clone, local preview, and the facts the kit cannot put in `R
 ## Pipeline API (`API_BASE`)
 
 - `API_BASE`: **https://733jzm4xv4.execute-api.us-east-2.amazonaws.com** (pipeline account 561303652468, us-east-2;
-  from the pipeline's handoff of 2026-10-20, stable across its T7 storage correction). It is in the operator's `.env` as
-  `PIPELINE_API_BASE`. Still to do by the operator: the GitHub repository variable of the same name, for CI's
-  served-contract check:
-  `gh variable set PIPELINE_API_BASE --repo xucian/roofing-crm --body https://733jzm4xv4.execute-api.us-east-2.amazonaws.com`.
+  from the pipeline's handoff of 2026-10-20, unchanged by its T7 storage correction). It is committed configuration, not
+  a secret: `apiBase` in `packages/pipeline-client/openapi.pin.json`, next to the contract it must serve. CI's
+  served-contract check, `pnpm deploy:aws` and `pnpm dev` read it there, so nothing is set in `.env` or on GitHub.
+  `PIPELINE_API_BASE` in the shell overrides it for one run, for example to point `pnpm dev` at a local pipeline.
 - Contract pin: `packages/contract/openapi.json` at pipeline commit `56b020c483d8197b15570275399e51ba512fca1d`, sha256
   `7d8ece6832aa5f618c2d2bff0b68edad139700fbe37c8c1b58e7b9be75db48bc` (`packages/pipeline-client/openapi.pin.json`). The
   served `GET {API_BASE}/v1/openapi.json` had the same bytes on 2026-10-20. To re-pin after a contract change, run
   `pnpm --filter @roofing-crm/pipeline-client pin <commit> packages/contract/openapi.json`. It reads the file at that
   commit from the local clone `../oracle-property-intelligence-platform-pipeline-travis-tx` (or from GitHub), never
   writes there, and generates the client types. Commit `openapi.pin.json`, `openapi/openapi.json` and
-  `src/generated/pipeline-api.ts` together. `pnpm --filter @roofing-crm/pipeline-client check:served` (with
-  `PIPELINE_API_BASE` set) compares the pin with the served contract.
+  `src/generated/pipeline-api.ts` together. `pnpm --filter @roofing-crm/pipeline-client check:served` compares the pin
+  with the contract served at `apiBase`.
 - The pipeline's account (pipeline handoff, 2026-10-20): it runs 10 Lambda executions at once in total, shared by the
-  pipeline API, the pipeline chat and this CRM's own functions, and caps functions at 3008 MB. A cold search takes
-  about 7 to 8 s once the pipeline's T7 correction is live. The CRM therefore keeps one pipeline call in flight per
-  page, waits up to 29 s per attempt, and shows a loading state on the default search.
+  pipeline API, the pipeline chat and this CRM's own functions, and caps functions at 3008 MB. The pipeline keeps no
+  warm instance. Measured after its T7 correction: on an idle API the first call takes about 3 to 5 s, and 8 to 9 s
+  right after a pipeline deploy or a long idle; warm, F1's default search takes 1.6 to 1.7 s end to end (0.3 s in the
+  function, the rest is the 500-item response) and a text search 1 to 1.5 s. The pipeline warms three instances after
+  each of its deploys, and before a demo on request. The CRM keeps one pipeline call in flight per page, sends
+  `/v1/meta` first so the search lands warm, waits up to 29 s per attempt without retrying a timeout, and says why a
+  call is slow after 3 s.
 
 ## Prerequisites (operator machine)
 
@@ -28,6 +32,7 @@ Deploy from a clean clone, local preview, and the facts the kit cannot put in `R
 - pnpm 10.34.6 through corepack: run `corepack enable` once. The repository's `packageManager` pins the version, and
   scripts call `pnpm` themselves.
 - AWS CLI v2 with a profile for the target account (`export AWS_PROFILE=<profile>`). The region is always `us-east-2`.
+  The evaluated deployment uses the pipeline's account, 561303652468, profile `cdk-lab` (decisions.md, 2026-10-20).
 - For the basemap: the `pmtiles` CLI (`brew install pmtiles`) or Docker, in which case the script runs the pinned
   `protomaps/go-pmtiles:v1.31.2` image.
 
@@ -39,7 +44,6 @@ corepack enable
 pnpm install --frozen-lockfile
 pnpm check          # format, lint, typecheck, tests, build, cdk synth, contract pin: what CI runs
 pnpm basemap        # basemap/: Travis extract, glyphs, sprites, SOURCE.json (about 85 MB, a minute or two)
-cp .env.example .env   # then set PIPELINE_API_BASE to API_BASE (above)
 export AWS_PROFILE=<profile>
 pnpm deploy:aws     # checks, shows the account and region, asks, builds, deploys, prints the URL
 ```
@@ -48,8 +52,8 @@ pnpm deploy:aws     # checks, shows the account and region, asks, builds, deploy
 `/v1/openapi.json` differs from the pin, when no credentials are found, or when the account has no CDK bootstrap in
 `us-east-2`; then it prints the one-time command `pnpm --filter @roofing-crm/api exec cdk bootstrap aws://<account>/us-east-2`.
 CDK asks before IAM changes (`--require-approval broadening`). The script writes `cdk-outputs.json` (git-ignored) and
-prints `WebUrl` and the F1 link. Redeploying updates the same stack, `RoofingCrm`. From `.env` it reads only
-`PIPELINE_API_BASE`.
+prints `WebUrl` and the F1 link. Redeploying updates the same stack, `RoofingCrm`. It reads nothing from `.env`: the
+pipeline API base is `apiBase` in `openapi.pin.json`, and the script says so when `PIPELINE_API_BASE` overrides it.
 
 The stack creates one private S3 bucket (build output and basemap, retained if the stack is deleted), one CloudFront
 distribution with an SPA-routing function and a security-headers policy, and CDK's bucket-deployment Lambda with a
@@ -65,17 +69,18 @@ distribution with an SPA-routing function and a security-headers policy, and CDK
 
 ## Local preview (no AWS)
 
-- `pnpm dev` serves the app at http://localhost:5173 with `/config.json` and `/basemap/*` from the working tree.
-  `PIPELINE_API_BASE` in the shell points it at the pipeline; without it the app says "Pipeline API not configured".
+- `pnpm dev` serves the app at http://localhost:5173 with `/config.json` and `/basemap/*` from the working tree. It
+  calls the pipeline at `apiBase` (the pipeline allows any origin), or at `PIPELINE_API_BASE` when that is set.
 - `pnpm build && pnpm --filter @roofing-crm/web preview` serves the production bundle at http://localhost:4173 under the
   same CSP and headers as CloudFront.
 
 ## CI
 
 `.github/workflows/ci.yml` runs on pull requests and on pushes to `main` and `assignment`: format, lint, typecheck,
-tests, build, `cdk synth` (no credentials, no deploy inputs) and the contract pin check. A second job compares the
-served `/v1/openapi.json` with the pin once the repository variable `PIPELINE_API_BASE` is set. CI never deploys and
-holds no AWS credentials.
+tests, build, `cdk synth` (no credentials, no deploy inputs) and the contract pin check; locally, `pnpm check` runs the
+same. A second job, "Served pipeline contract matches the pin", fetches `/v1/openapi.json` from `apiBase` and compares
+it with the pin; locally, `pnpm --filter @roofing-crm/pipeline-client check:served`. Neither needs a repository
+variable or secret. CI never deploys and holds no AWS credentials.
 
 ## Teardown (only after the evaluation)
 

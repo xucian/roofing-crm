@@ -24,7 +24,7 @@ export function Footer({ config, meta }: { config: RuntimeConfig; meta: MetaStat
 function RunDetails({ meta }: { meta: MetaState }) {
   switch (meta.status) {
     case 'waiting':
-      return <span className="app-footer-grow">Run details load after the first search.</span>;
+      return <span className="app-footer-grow">Loading run details…</span>;
     case 'failed':
       return (
         <span className="app-footer-grow">
