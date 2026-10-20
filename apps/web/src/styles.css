@@ -10,6 +10,10 @@
   --color-accent-weak: #e3f4f1;
   --color-aged: #c2410c;
   --color-aged-cluster: #9a3412;
+  --color-permit: #7c3aed;
+  --color-permit-cluster: #5b21b6;
+  --color-long-open: #be123c;
+  --color-long-open-cluster: #9f1239;
   --color-info-bg: #eaf3fb;
   --color-info-border: #9cc3e6;
   --color-warning-bg: #fff6e5;
@@ -223,10 +227,28 @@ code {
     0 0 0 2.5px rgb(0 0 0 / 0.15);
 }
 
+.legend-swatch--permit {
+  background: var(--color-permit);
+  box-shadow:
+    0 0 0 1.5px #fff,
+    0 0 0 2.5px rgb(0 0 0 / 0.15);
+}
+
+.legend-swatch--long-open {
+  background: var(--color-long-open);
+  box-shadow:
+    0 0 0 1.5px #fff,
+    0 0 0 2.5px rgb(0 0 0 / 0.15);
+}
+
 .legend-swatch--cluster {
   width: 16px;
   height: 16px;
-  background: var(--color-aged-cluster);
+  background: conic-gradient(
+    var(--color-long-open-cluster) 0 33%,
+    var(--color-permit-cluster) 0 66%,
+    var(--color-aged-cluster) 0
+  );
   box-shadow:
     0 0 0 2px #fff,
     0 0 0 3px rgb(0 0 0 / 0.12);
@@ -326,6 +348,21 @@ code {
 
 .field-range {
   width: 100%;
+  accent-color: var(--color-accent);
+}
+
+.field-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.field-check input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
   accent-color: var(--color-accent);
 }
 
@@ -572,6 +609,32 @@ code {
   color: var(--color-aged-cluster);
 }
 
+.reason--open_roofing_permit,
+.reason--stalled_roofing_permit {
+  background: #f3efff;
+  border-color: #c4b1f7;
+  color: var(--color-permit-cluster);
+}
+
+.reason--long_open_roofing_permit {
+  background: #fff0f3;
+  border-color: #f4a3b6;
+  color: var(--color-long-open-cluster);
+}
+
+.result-permits {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--color-permit-cluster);
+}
+
+.result-chevron {
+  margin-left: 6px;
+  color: var(--color-accent-strong);
+  font-size: 16px;
+  line-height: 1;
+}
+
 .result-meta,
 .result-caveats,
 .results-request,
@@ -588,6 +651,257 @@ code {
 
 .result-meta a {
   color: var(--color-accent-strong);
+}
+
+/* Property detail drawer */
+
+.app-main--detail {
+  grid-template-columns: minmax(0, 1fr) 420px 360px;
+}
+
+.detail-drawer {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--color-surface);
+  border-left: 1px solid var(--color-border);
+}
+
+.detail-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.detail-title {
+  font-size: 16px;
+  font-weight: 650;
+  outline: none;
+}
+
+.detail-close {
+  flex: none;
+  width: 30px;
+  height: 30px;
+  border: 1px solid var(--color-border);
+  border-radius: 50%;
+  background: var(--color-surface);
+  color: var(--color-muted);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.detail-close:hover {
+  color: var(--color-text);
+  border-color: var(--color-muted);
+}
+
+.detail-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.detail-body > .results-loading,
+.detail-body > .callout {
+  margin: 16px;
+}
+
+.detail-section {
+  display: grid;
+  gap: 8px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.detail-heading {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.detail-ids {
+  color: var(--color-muted);
+  font-size: 12.5px;
+  overflow-wrap: anywhere;
+}
+
+.detail-fields {
+  display: grid;
+  gap: 3px;
+  margin: 0;
+  font-size: 13px;
+}
+
+.detail-fields div {
+  display: flex;
+  gap: 10px;
+}
+
+.detail-fields dt {
+  flex: none;
+  width: 118px;
+  color: var(--color-muted);
+}
+
+.detail-fields dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.detail-fields--provenance {
+  font-size: 12px;
+}
+
+.detail-fields--provenance dt {
+  width: 92px;
+}
+
+.permit-list {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.permit {
+  display: grid;
+  gap: 4px;
+  padding: 10px 12px;
+  border: 1px solid var(--color-border);
+  border-left: 4px solid var(--color-border);
+  border-radius: var(--radius);
+}
+
+.permit--open,
+.permit--stalled {
+  border-left-color: var(--color-permit);
+}
+
+.permit--long-open {
+  border-left-color: var(--color-long-open);
+}
+
+.permit-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.permit-id {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.status {
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 11.5px;
+  font-weight: 650;
+  border: 1px solid var(--color-border);
+  background: var(--color-surface-muted);
+  cursor: help;
+}
+
+.status--open,
+.status--stalled {
+  background: #f3efff;
+  border-color: #c4b1f7;
+  color: var(--color-permit-cluster);
+}
+
+.status--long-open {
+  background: #fff0f3;
+  border-color: #f4a3b6;
+  color: var(--color-long-open-cluster);
+  cursor: default;
+}
+
+.permit-duration {
+  font-weight: 650;
+}
+
+.permit--long-open .permit-duration {
+  color: var(--color-long-open-cluster);
+}
+
+.permit-work,
+.permit-meta {
+  color: var(--color-muted);
+  font-size: 12.5px;
+  overflow-wrap: anywhere;
+}
+
+.permit-description {
+  font-size: 13px;
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+}
+
+.permit-contractor {
+  display: grid;
+  gap: 3px;
+  margin-top: 4px;
+  padding-top: 6px;
+  border-top: 1px dashed var(--color-border);
+}
+
+.permit-subheading {
+  font-size: 12px;
+  font-weight: 650;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--color-muted);
+}
+
+.permit-sources summary,
+.detail-other summary {
+  cursor: pointer;
+  color: var(--color-accent-strong);
+  font-size: 12.5px;
+}
+
+.permit-sources[open] summary,
+.detail-other[open] summary {
+  margin-bottom: 6px;
+}
+
+.detail-other .permit-list {
+  margin-top: 6px;
+}
+
+.detail-fields--provenance a,
+.permit-meta a {
+  color: var(--color-accent-strong);
+}
+
+/* Below 1440 px a third column would leave the map too narrow, so the drawer lies over its right side. */
+@media (min-width: 901px) and (max-width: 1439px) {
+  .app-main {
+    position: relative;
+  }
+
+  .app-main--detail {
+    grid-template-columns: minmax(0, 1fr) 360px;
+  }
+
+  .detail-drawer {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    right: 360px;
+    z-index: 5;
+    width: min(420px, calc(100% - 360px - 48px));
+    box-shadow: var(--shadow);
+  }
 }
 
 /* Footer */
@@ -714,5 +1028,17 @@ code {
     border-left: 0;
     border-top: 1px solid var(--color-border);
     overflow: visible;
+  }
+
+  .app-main--detail {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  /* On a phone the drawer takes the whole screen until it is closed. */
+  .detail-drawer {
+    position: fixed;
+    inset: 0;
+    z-index: 20;
+    border-left: 0;
   }
 }

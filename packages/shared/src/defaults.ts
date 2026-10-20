@@ -26,6 +26,13 @@ export const RADIUS_MILES = { default: 5, min: 0.1, max: 25, step: 0.1 } as cons
 export const ROOF_AGE_THRESHOLD_YEARS = { default: 15, min: 0, max: 100, step: 1 } as const;
 
 /**
+ * The permit signal (docs/decisions.md §4): properties with an open or stalled roofing permit are
+ * listed by default, and a permit open at least 5 years is "long-open" (the contract's
+ * `long_open_years`, sent explicitly so the legend and the server agree).
+ */
+export const PERMIT_SIGNAL = { defaultOn: true, longOpenYears: 5 } as const;
+
+/**
  * Page size of the map's search: the first 500 matches become markers and the list pages through
  * the rest (docs/decisions.md §4 "Scale" and the 2026-10-17 entry; the REST default is 50).
  */

@@ -1,4 +1,9 @@
-import { RADIUS_MILES, ROOF_AGE_THRESHOLD_YEARS, formatCoordinates } from '@roofing-crm/shared';
+import {
+  PERMIT_SIGNAL,
+  RADIUS_MILES,
+  ROOF_AGE_THRESHOLD_YEARS,
+  formatCoordinates,
+} from '@roofing-crm/shared';
 import type { Dispatch, ReactNode } from 'react';
 import { NumberField } from './NumberField';
 import { centerLabel, type SearchAction, type SearchState } from './search-state';
@@ -71,6 +76,24 @@ export function SearchPanel({ search, dispatch, locating, onLocate, place }: Sea
           dispatch({ type: 'roofAgeMin', years });
         }}
       />
+
+      <div className="field">
+        <label className="field-check">
+          <input
+            type="checkbox"
+            checked={search.openPermits}
+            aria-describedby="open-permits-hint"
+            onChange={(event) => {
+              dispatch({ type: 'openPermits', on: event.target.checked });
+            }}
+          />
+          Open and stalled roofing permits
+        </label>
+        <p id="open-permits-hint" className="field-hint">
+          Also list properties with an open or expired-unfinished roofing permit, whatever the roof
+          age, longest open first. Open {PERMIT_SIGNAL.longOpenYears} years or more is long-open.
+        </p>
+      </div>
 
       <button
         type="button"

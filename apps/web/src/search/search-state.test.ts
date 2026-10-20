@@ -10,12 +10,13 @@ import {
 } from './search-state';
 
 describe('defaults', () => {
-  it('opens on Austin, 5 miles, older than 15 years (docs/decisions.md §4)', () => {
+  it('opens on Austin, 5 miles, older than 15 years, open permits on (docs/decisions.md §4)', () => {
     expect(DEFAULT_SEARCH).toEqual({
       center: { lat: 30.2672, lon: -97.7431 },
       centerSource: 'default',
       radiusMiles: 5,
       roofAgeMin: 15,
+      openPermits: true,
     });
   });
 });
@@ -23,13 +24,21 @@ describe('defaults', () => {
 describe('parseSearchParams', () => {
   it('reads a shared link', () => {
     expect(
-      parseSearchParams(new URLSearchParams('lat=30.4394&lon=-97.62&radius=2.5&age=20')),
+      parseSearchParams(new URLSearchParams('lat=30.4394&lon=-97.62&radius=2.5&age=20&permits=0')),
     ).toEqual({
       center: { lat: 30.4394, lon: -97.62 },
       centerSource: 'link',
       radiusMiles: 2.5,
       roofAgeMin: 20,
+      openPermits: false,
     });
+  });
+
+  it('keeps the permit signal on unless the link says permits=0', () => {
+    expect(parseSearchParams(new URLSearchParams('lat=30.4&lon=-97.7')).openPermits).toBe(true);
+    expect(parseSearchParams(new URLSearchParams('permits=1')).openPermits).toBe(true);
+    expect(parseSearchParams(new URLSearchParams('permits=no')).openPermits).toBe(true);
+    expect(parseSearchParams(new URLSearchParams('permits=0')).openPermits).toBe(false);
   });
 
   it('falls back to Austin for a missing, partial or out-of-area center', () => {
@@ -59,8 +68,11 @@ describe('parseSearchParams', () => {
       point: { lat: 30.512345678, lon: -97.689 },
     });
     const params = toSearchParams(state);
-    expect(params.toString()).toBe('lat=30.51235&lon=-97.68900&radius=5&age=15');
+    expect(params.toString()).toBe('lat=30.51235&lon=-97.68900&radius=5&age=15&permits=1');
     expect(parseSearchParams(params).center).toEqual(state.center);
+    const off = searchReducer(state, { type: 'openPermits', on: false });
+    expect(toSearchParams(off).get('permits')).toBe('0');
+    expect(parseSearchParams(toSearchParams(off))).toEqual({ ...off, centerSource: 'link' });
   });
 });
 

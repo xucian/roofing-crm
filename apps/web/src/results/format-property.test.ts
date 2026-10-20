@@ -3,6 +3,7 @@ import { fixtureProperty } from '../test/fixtures';
 import {
   formatAddress,
   formatCoordinateBasis,
+  formatPermitCounts,
   formatRoofAge,
   formatRoofAnchor,
   formatRoofBasis,
@@ -36,6 +37,13 @@ describe('format-property', () => {
       ),
     ).toBe('since 2008, completed roof replacement');
     expect(formatRoofBasis(fixtureProperty(1, { roof_age_basis: null }))).toBeNull();
+  });
+
+  it('counts the roofing permits by group, and says nothing when there are none', () => {
+    expect(formatPermitCounts({ open: 1, stalled: 0, closed: 2, needs_review: 0 })).toBe(
+      '1 open, 2 closed',
+    );
+    expect(formatPermitCounts({ open: 0, stalled: 0, closed: 0, needs_review: 0 })).toBeNull();
   });
 
   it('names the anchor: a permit and its date, or the roll', () => {

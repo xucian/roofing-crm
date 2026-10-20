@@ -454,3 +454,47 @@ check can go ahead.
 - **`/v1/agent/chat`** answers `503 agent_unavailable` until the pipeline's T9. The CRM's agent is its own (§6) and calls
   only the pipeline's query endpoints, so this changes nothing here.
 - **One pipeline call in flight** stays until the account's concurrency increase lands.
+
+## 2026-10-20 — F2 built: permit signal and property detail
+
+F1 was verified on the public URL on 2026-10-20 (`docs/progress.md`). F2 (README AC 5 and 6) is browser-only: it adds
+two pipeline reads to the pinned client and no AWS resource, so it deploys as a web update of the same stack. Where this
+entry differs from earlier text, this entry wins.
+
+- **Permit signal on by default** (§4). The search panel's "Open and stalled roofing permits" toggle sends
+  `open_permits`, and every search sends `long_open_years=5` explicitly, so the legend and the server use the same
+  threshold. The URL carries `permits=1` or `permits=0`; a link without it keeps the default (on). Measured on
+  2026-10-20 at the default search: 53,308 matches with the toggle off, 54,173 with it on, and every one of the first 500
+  rows has an open roofing permit, longest open first, as the contract's sort says.
+- **Emphasis on long-open permits** (AC 5). A marker takes the color of the match's strongest signal: a long-open
+  roofing permit (`long_open_roofing_permit`), then an open or stalled one, then an aged roof. Long-open markers are
+  drawn above the others, and a cluster takes the strongest color among its members (`clusterProperties` counts). Rows
+  show the match reasons with the same colors and the property's roofing permits by group (`roofing_permit_counts`).
+- **The drawer** (§7, AC 6). A row or a marker opens its property; `?property=<property_id>` opens it from a link, and
+  × or Escape closes it. It reads `GET /v1/properties/{property_id}` through the same one-at-a-time queue. With a
+  shared link the order is `/v1/meta`, the property, then the search. It shows:
+  - the ids, the distance and match reasons from the row when the property is in the results, and the roof age with
+    its basis, confidence, anchor, as-of date, caveats and year built;
+  - the permits. The embedded list comes unordered (seen live on 2026-10-20), so the drawer sorts it by the permit
+    search's rule (open, stalled, closed, needs review; longest open first; permit id). Roofing permits come first;
+    trade and other permits are folded under "Other permits". Each permit shows its status group and printed status,
+    open duration (open: since when; stalled: how long it was open and how long ago it expired), roof work class,
+    description, dates, how it was linked to the property, and its source and CIDs;
+  - the contractor as printed (name, company, trade, phone; empty fields left out), labelled "an attribution, not a
+    verified identity", and BBB exactly as reported: "Rating …", "No BBB profile" or "Blocked at source". The
+    pipeline's BBB note is shown once per drawer. In the current run every contractor is "Blocked at source";
+  - the owner's public roll fields (name, mailing address, deed date, tenure, absentee, out-of-area), in the drawer
+    only, with the note that the roll has no owner phone or email;
+  - the property's sources: CID-backed fields (`record_cid`, `property_cid`, `data_group_cid`) and source-backed
+    fields (`unpublished_source.fields`) are labelled apart, as are the owner's and each permit's;
+  - the request id of the property read.
+- **More than 50 permits.** "Load more permits" reads `/v1/permits/search?property_id=…` with every status group,
+  `roofing_only=false` and `limit=500`, which replaces the embedded list, and pages on through `next_cursor`. A stale
+  cursor restarts from the first page. The contract's list parameters are `style: form, explode: false`, so the client
+  sends `status_group=open,stalled,closed,needs_review`, not the parameter repeated.
+- **Layout.** From 1440 px wide the drawer is a third column between the map and the list. From 901 to 1439 px it lies
+  over the map's right side, because a third column would leave the map about 300 px wide at 1280 px. On a phone it
+  takes the whole screen until closed.
+- **Tests.** Synthetic permits and property details in the contract's shapes join the fixtures (`FX-` permit ids,
+  example.org URLs). The app tests cover the toggle and its URL, the drawer's order and fields, a shared link, a
+  failed read with its request id and "Try again", and permit paging with the comma-separated list parameters.

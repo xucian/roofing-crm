@@ -3,21 +3,32 @@
 // openapi.json (openapi.pin.json). No operation or schema type is written by hand.
 export { createPipelineClient } from './client';
 export type {
+  Bbb,
   CallOptions,
   MatchReason,
   Meta,
+  Owner,
+  PermitContractor,
+  PermitSearchQuery,
+  PermitSearchResponse,
+  PermitSummary,
   PipelineAnswer,
   PipelineClient,
   PipelineClientOptions,
   PipelineSchemas,
+  PropertyDetail,
   PropertySearchQuery,
   PropertySearchResponse,
   PropertySummary,
   RoofAgeAnchor,
   RoofAgeBasis,
   RoofAgeConfidence,
+  RoofWorkClass,
   SearchCenter,
   SearchCentersResponse,
+  Source,
+  StatusGroup,
+  UnpublishedSource,
 } from './client';
 export {
   PipelineError,

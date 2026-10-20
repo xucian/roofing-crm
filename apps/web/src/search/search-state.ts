@@ -1,6 +1,7 @@
 import {
   DEFAULT_CENTER,
   MAP_BOUNDS,
+  PERMIT_SIGNAL,
   RADIUS_MILES,
   ROOF_AGE_THRESHOLD_YEARS,
   clamp,
@@ -18,6 +19,8 @@ export interface SearchState {
   radiusMiles: number;
   /** Strict threshold: a roof matches when its age is greater than this. */
   roofAgeMin: number;
+  /** Also match properties with an open or stalled roofing permit (on by default, §4). */
+  openPermits: boolean;
 }
 
 export type SearchAction =
@@ -29,14 +32,19 @@ export type SearchAction =
   | { type: 'restore'; center: GeoPoint; centerSource: CenterSource }
   | { type: 'radius'; miles: number }
   | { type: 'roofAgeMin'; years: number }
+  | { type: 'openPermits'; on: boolean }
   | { type: 'reset' };
 
-/** The search that runs on load (docs/decisions.md §4): Austin, 5 miles, older than 15 years. */
+/**
+ * The search that runs on load (docs/decisions.md §4): Austin, 5 miles, roofs older than 15 years
+ * or an open or stalled roofing permit.
+ */
 export const DEFAULT_SEARCH: SearchState = {
   center: { lat: DEFAULT_CENTER.lat, lon: DEFAULT_CENTER.lon },
   centerSource: 'default',
   radiusMiles: RADIUS_MILES.default,
   roofAgeMin: ROOF_AGE_THRESHOLD_YEARS.default,
+  openPermits: PERMIT_SIGNAL.defaultOn,
 };
 
 const COORDINATE_DECIMALS = 5;
@@ -65,9 +73,17 @@ const readNumber = (params: URLSearchParams, key: string): number => {
   return raw === null || raw.trim() === '' ? Number.NaN : Number(raw);
 };
 
+/** `permits=0` turns the permit signal off and `permits=1` on; anything else keeps the default. */
+function readPermits(params: URLSearchParams): boolean {
+  const raw = params.get('permits');
+  if (raw === '0') return false;
+  if (raw === '1') return true;
+  return PERMIT_SIGNAL.defaultOn;
+}
+
 /**
- * Reads `?lat=&lon=&radius=&age=` so a search can be shared or handed over as one URL. A center
- * outside the map's extent, or half a center, falls back to Austin.
+ * Reads `?lat=&lon=&radius=&age=&permits=` so a search can be shared or handed over as one URL. A
+ * center outside the map's extent, or half a center, falls back to Austin.
  */
 export function parseSearchParams(params: URLSearchParams): SearchState {
   const lat = readNumber(params, 'lat');
@@ -79,6 +95,7 @@ export function parseSearchParams(params: URLSearchParams): SearchState {
     centerSource: linked ? 'link' : 'default',
     radiusMiles: normalizeRadius(params.has('radius') ? readNumber(params, 'radius') : Number.NaN),
     roofAgeMin: normalizeRoofAgeMin(params.has('age') ? readNumber(params, 'age') : Number.NaN),
+    openPermits: readPermits(params),
   };
 }
 
@@ -88,6 +105,7 @@ export function toSearchParams(state: SearchState): URLSearchParams {
     lon: state.center.lon.toFixed(COORDINATE_DECIMALS),
     radius: String(state.radiusMiles),
     age: String(state.roofAgeMin),
+    permits: state.openPermits ? '1' : '0',
   });
 }
 
@@ -105,6 +123,8 @@ export function searchReducer(state: SearchState, action: SearchAction): SearchS
       return { ...state, radiusMiles: normalizeRadius(action.miles) };
     case 'roofAgeMin':
       return { ...state, roofAgeMin: normalizeRoofAgeMin(action.years) };
+    case 'openPermits':
+      return { ...state, openPermits: action.on };
     case 'reset':
       return DEFAULT_SEARCH;
   }

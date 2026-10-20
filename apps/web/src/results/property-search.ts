@@ -4,12 +4,13 @@ import type {
   PropertySearchResponse,
   PropertySummary,
 } from '@roofing-crm/pipeline-client';
-import { MAP_RESULT_LIMIT } from '@roofing-crm/shared';
+import { MAP_RESULT_LIMIT, PERMIT_SIGNAL } from '@roofing-crm/shared';
 import type { SearchState } from '../search/search-state';
 
 /**
- * The map's search as the pipeline names it. F1 asks for aged roofs only (`open_permits=false`);
- * F2 adds the open-permit toggle (docs/decisions.md 2026-10-17). The first 500 rows are the markers.
+ * The map's search as the pipeline names it: roofs older than the threshold or, with the permit
+ * toggle on (the default), an open or stalled roofing permit, which the API lists first, longest
+ * open first (docs/decisions.md §4). The first 500 rows are the markers.
  */
 export function toPropertyQuery(search: SearchState): PropertySearchQuery {
   return {
@@ -17,7 +18,8 @@ export function toPropertyQuery(search: SearchState): PropertySearchQuery {
     lon: search.center.lon,
     radius_miles: search.radiusMiles,
     roof_age_min: search.roofAgeMin,
-    open_permits: false,
+    open_permits: search.openPermits,
+    long_open_years: PERMIT_SIGNAL.longOpenYears,
     limit: MAP_RESULT_LIMIT,
   };
 }

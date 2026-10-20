@@ -1,4 +1,5 @@
 import { useEffect, useReducer, type Dispatch } from 'react';
+import { replaceUrlParams } from '../app/url-params';
 import {
   parseSearchParams,
   searchReducer,
@@ -14,10 +15,7 @@ export function useSearchState(): [SearchState, Dispatch<SearchAction>] {
   );
 
   useEffect(() => {
-    const query = toSearchParams(state).toString();
-    if (window.location.search !== `?${query}`) {
-      window.history.replaceState(window.history.state, '', `${window.location.pathname}?${query}`);
-    }
+    replaceUrlParams(toSearchParams(state));
   }, [state]);
 
   return [state, dispatch];

@@ -18,6 +18,19 @@ export type SearchCentersResponse = PipelineSchemas['SearchCentersResponse'];
 export type PropertySearchQuery = NonNullable<
   paths['/v1/properties/search']['get']['parameters']['query']
 >;
+export type PropertyDetail = PipelineSchemas['PropertyDetail'];
+export type PermitSummary = PipelineSchemas['PermitSummary'];
+export type PermitContractor = PipelineSchemas['PermitContractor'];
+export type PermitSearchResponse = PipelineSchemas['PermitSearchResponse'];
+export type PermitSearchQuery = NonNullable<
+  paths['/v1/permits/search']['get']['parameters']['query']
+>;
+export type Bbb = PipelineSchemas['Bbb'];
+export type Owner = PipelineSchemas['Owner'];
+export type RoofWorkClass = PipelineSchemas['RoofWorkClass'];
+export type Source = PipelineSchemas['Source'];
+export type StatusGroup = PipelineSchemas['StatusGroup'];
+export type UnpublishedSource = PipelineSchemas['UnpublishedSource'];
 
 /** A successful answer and the id that joins it to the pipeline's logs (`x-request-id`). */
 export interface PipelineAnswer<T> {
@@ -38,6 +51,13 @@ export interface PipelineClient {
   ): Promise<PipelineAnswer<PropertySearchResponse>>;
   /** Resolves a city, alias or ZIP to search centers (`/v1/search-centers`). */
   searchCenters(q: string, options?: CallOptions): Promise<PipelineAnswer<SearchCentersResponse>>;
+  /** One property with its owner and its first 50 permits (`permits_total` counts them all). */
+  getProperty(propertyId: string, options?: CallOptions): Promise<PipelineAnswer<PropertyDetail>>;
+  /** Permits by area, status, contractor or property; pages beyond a property's first 50. */
+  searchPermits(
+    query: PermitSearchQuery,
+    options?: CallOptions,
+  ): Promise<PipelineAnswer<PermitSearchResponse>>;
 }
 
 export interface PipelineClientOptions {
@@ -89,6 +109,25 @@ export function createPipelineClient(options: PipelineClientOptions): PipelineCl
       return answer(
         await client.GET('/v1/search-centers', {
           params: { query: { q } },
+          signal: callOptions?.signal,
+        }),
+      );
+    },
+    async getProperty(propertyId, callOptions) {
+      return answer(
+        await client.GET('/v1/properties/{property_id}', {
+          params: { path: { property_id: propertyId } },
+          signal: callOptions?.signal,
+        }),
+      );
+    },
+    async searchPermits(query, callOptions) {
+      return answer(
+        await client.GET('/v1/permits/search', {
+          params: { query },
+          // The contract's list parameters (`status_group`, `roof_work_class`) are form style
+          // without explode: one comma-separated value, not the parameter repeated.
+          querySerializer: { array: { style: 'form', explode: false } },
           signal: callOptions?.signal,
         }),
       );

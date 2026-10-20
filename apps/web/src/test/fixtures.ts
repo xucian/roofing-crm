@@ -1,4 +1,10 @@
-import type { Meta, PropertySummary, SearchCenter } from '@roofing-crm/pipeline-client';
+import type {
+  Meta,
+  PermitSummary,
+  PropertyDetail,
+  PropertySummary,
+  SearchCenter,
+} from '@roofing-crm/pipeline-client';
 
 // Synthetic records in the pinned contract's shapes, for tests only. Every value is invented
 // ("FIXTURE" addresses, "fx-" ids, example.org URLs): no county data is copied into the repository
@@ -49,6 +55,127 @@ export function fixtureProperty(
     unpublished_source: null,
     distance_miles: n / 10,
     match_reasons: ['aged_roof'],
+    ...overrides,
+  };
+}
+
+const FIXTURE_REQUEST = {
+  method: 'GET',
+  url: 'https://example.org/fixture',
+  multiValueQueryString: {},
+} as const;
+
+/** An open roofing permit, open 2,000 days, with a printed contractor and BBB blocked. */
+export function fixturePermit(n: number, overrides: Partial<PermitSummary> = {}): PermitSummary {
+  const id = `FX-${String(n)} BP`;
+  return {
+    permit_id: id,
+    geo_id: null,
+    property_id: 'fx-1',
+    property_link: { match_method: 'exact', normalization_version: null, confidence: 'exact' },
+    permit_type: 'BP',
+    permit_class: 'FIXTURE CLASS',
+    work_class: 'Repair',
+    description: `Fixture re-roof ${String(n)}`,
+    roof_work_class: 'primary_roof_replacement',
+    work_classifier_version: 'fixture-1',
+    is_roofing: true,
+    is_reroof: true,
+    status: 'Active',
+    status_group: 'open',
+    status_observed_at: '2026-10-16T00:00:00Z',
+    status_source: 'indexed',
+    applied_date: '2021-01-01',
+    issued_date: '2021-04-01',
+    expires_date: '2022-04-01',
+    completed_date: null,
+    completed_date_evidence: 'unknown',
+    open_since: '2021-04-01',
+    open_since_basis: 'issued_date',
+    open_duration_days: 2000,
+    open_duration_basis: 'today',
+    open_duration_as_of: '2026-10-20',
+    days_since_expiry: null,
+    contractor: {
+      contractor_attribution_key: `fx-key-${String(n)}`,
+      identity_status: 'source_name_attribution',
+      printed_name: 'FIXTURE ROOFER',
+      company_name: 'FIXTURE ROOFING CO',
+      trade: 'General Contractor',
+      phone: '000-000-0000',
+    },
+    bbb: {
+      rating: null,
+      status: 'blocked',
+      incomplete_reason: 'http_403_source_block',
+      note: 'Fixture note: BBB blocks scripted access.',
+    },
+    lat: 30.25,
+    lon: -97.75,
+    source: {
+      dataset: 'fixture-permits',
+      record_id: id,
+      url: `https://example.org/fixture/permits/${String(n)}`,
+      fetched_at: '2026-10-16T00:00:00Z',
+      run_id: 'fixture-run',
+      request_identifier: id,
+      source_http_request: FIXTURE_REQUEST,
+    },
+    record_cid: `bafyfixturepermit${String(n)}`,
+    property_cid: 'bafyfixtureproperty',
+    data_group_cid: 'bafyfixturegroup',
+    unpublished_source: {
+      dataset: 'fixture-permit-export',
+      url: 'https://example.org/fixture/export',
+      fetched_at: '2026-10-16T00:00:00Z',
+      source_http_request: FIXTURE_REQUEST,
+      row_sha256: 'f1x7ure0000000000000000000000000000000000000000000000000000000000',
+      evidence_state: 'confirmed_present',
+      fields: ['description', 'status', 'contractor_full_name'],
+    },
+    ...overrides,
+  };
+}
+
+/** A property with an owner and the given permits (by default one open roofing permit). */
+export function fixtureDetail(n: number, overrides: Partial<PropertyDetail> = {}): PropertyDetail {
+  // A property read by id carries no search fields: no match reasons, no distance.
+  const summary = fixtureProperty(n);
+  delete summary.match_reasons;
+  delete summary.distance_miles;
+  const permits = overrides.permits ?? [fixturePermit(1, { property_id: summary.property_id })];
+  return {
+    ...summary,
+    geo_id: `fx-geo-${String(n)}`,
+    roofing_permit_counts: { open: 1, stalled: 0, closed: 0, needs_review: 0 },
+    unpublished_source: {
+      dataset: 'fixture-roll-export',
+      url: 'https://example.org/fixture/roll',
+      fetched_at: '2026-10-16T00:00:00Z',
+      source_http_request: FIXTURE_REQUEST,
+      row_sha256: 'f1x7ure1111111111111111111111111111111111111111111111111111111111',
+      evidence_state: 'confirmed_present',
+      fields: ['geo_id', 'owner_name', 'mailing_address', 'deed_date'],
+    },
+    owner: {
+      owner_name: 'FIXTURE OWNER',
+      mailing_address: {
+        line1: 'PO BOX 0',
+        line2: null,
+        city: 'TESTVILLE',
+        state: 'TX',
+        zip: '00000',
+      },
+      deed_date: '2001-02-03',
+      owner_tenure_years: 25.7,
+      owner_absentee: true,
+      owner_out_of_area: false,
+      source: summary.source,
+      unpublished_source: null,
+    },
+    permits,
+    permits_total: permits.length,
+    permits_truncated: false,
     ...overrides,
   };
 }

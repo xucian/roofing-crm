@@ -101,6 +101,31 @@ describe('createPipelineClient', () => {
     expect(seen[0]?.query.get('q')).toBe('West Lake & Hills');
   });
 
+  it('reads one property, with the id encoded as one path segment', async () => {
+    answer = { status: 200, body: { property_id: 'fx 1/2' } };
+    const result = await client().getProperty('fx 1/2');
+    expect(seen[0]?.path).toBe('/v1/properties/fx%201%2F2');
+    expect(result).toEqual({ data: { property_id: 'fx 1/2' }, requestId: 'req-fixture-1' });
+  });
+
+  it('sends list parameters of the permit search comma-separated, as the contract says', async () => {
+    answer = { status: 200, body: EMPTY_SEARCH };
+    await client().searchPermits({
+      property_id: 'fx-1',
+      status_group: ['open', 'stalled', 'closed', 'needs_review'],
+      roofing_only: false,
+      limit: 500,
+    });
+    expect(seen[0]?.path).toBe('/v1/permits/search');
+    expect(seen[0]?.query.getAll('status_group')).toEqual(['open,stalled,closed,needs_review']);
+    expect(Object.fromEntries(seen[0]?.query ?? [])).toEqual({
+      property_id: 'fx-1',
+      status_group: 'open,stalled,closed,needs_review',
+      roofing_only: 'false',
+      limit: '500',
+    });
+  });
+
   it('reads /v1/meta', async () => {
     answer = { status: 200, body: { county: 'fixture' } };
     const result = await client().getMeta();

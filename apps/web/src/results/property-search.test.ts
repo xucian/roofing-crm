@@ -20,15 +20,20 @@ function started(key = 'k1', run = 1): ResultsState {
 }
 
 describe('toPropertyQuery', () => {
-  it('asks for aged roofs only, 500 at a time, around the center (F1)', () => {
+  it('asks for aged roofs or open and stalled roofing permits, 500 at a time (§4)', () => {
     expect(toPropertyQuery(DEFAULT_SEARCH)).toEqual({
       lat: 30.2672,
       lon: -97.7431,
       radius_miles: 5,
       roof_age_min: 15,
-      open_permits: false,
+      open_permits: true,
+      long_open_years: 5,
       limit: 500,
     });
+  });
+
+  it('asks for aged roofs only when the permit toggle is off', () => {
+    expect(toPropertyQuery({ ...DEFAULT_SEARCH, openPermits: false }).open_permits).toBe(false);
   });
 
   it('keys equal queries equally', () => {

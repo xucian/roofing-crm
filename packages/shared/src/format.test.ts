@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { formatCoordinates, formatCount, formatMatchSummary, formatMiles } from './format';
+import {
+  formatCoordinates,
+  formatCount,
+  formatDays,
+  formatMatchSummary,
+  formatMiles,
+} from './format';
 import { DISABLED_SECTIONS } from './sections';
 
 describe('formatMatchSummary', () => {
@@ -30,6 +36,27 @@ describe('number and coordinate formats', () => {
 
   it('prints coordinates at fixed precision with an ASCII minus', () => {
     expect(formatCoordinates({ lat: 30.2672, lon: -97.7431 })).toBe('30.26720, -97.74310');
+  });
+});
+
+describe('formatDays', () => {
+  it('counts days, then months, then years', () => {
+    expect(formatDays(0)).toBe('0 days');
+    expect(formatDays(1)).toBe('1 day');
+    expect(formatDays(59)).toBe('59 days');
+    expect(formatDays(180)).toBe('5 months');
+    expect(formatDays(729)).toBe('23 months');
+  });
+
+  it('gives years with one decimal, never rounded up past the threshold', () => {
+    expect(formatDays(730.5)).toBe('2 years');
+    expect(formatDays(1826)).toBe('4.9 years');
+    expect(formatDays(5 * 365.25)).toBe('5 years');
+    expect(formatDays(1900)).toBe('5.2 years');
+  });
+
+  it('gives whole years from ten years on', () => {
+    expect(formatDays(16433)).toBe('44 years');
   });
 });
 

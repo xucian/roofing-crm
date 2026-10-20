@@ -27,3 +27,23 @@ export function formatMiles(miles: number): string {
 export function formatCoordinates(point: GeoPoint, decimals = 5): string {
   return `${point.lat.toFixed(decimals)}, ${point.lon.toFixed(decimals)}`;
 }
+
+const DAYS_PER_YEAR = 365.25;
+const DAYS_PER_MONTH = DAYS_PER_YEAR / 12;
+const YEARS_FORMAT = new Intl.NumberFormat('en-US', { maximumFractionDigits: 1 });
+
+const plural = (value: number, unit: string): string =>
+  `${formatCount(value)} ${unit}${value === 1 ? '' : 's'}`;
+
+/**
+ * A permit's open duration or time since expiry, from the API's day count: "12 days",
+ * "7 months", "5.2 years", "45 years" (whole years from 10 on).
+ */
+export function formatDays(days: number): string {
+  if (days < 60) return plural(Math.max(0, Math.round(days)), 'day');
+  if (days < 2 * DAYS_PER_YEAR) return plural(Math.floor(days / DAYS_PER_MONTH), 'month');
+  const years = days / DAYS_PER_YEAR;
+  if (years >= 10) return plural(Math.floor(years), 'year');
+  const rounded = Math.floor(years * 10) / 10;
+  return `${YEARS_FORMAT.format(rounded)} years`;
+}

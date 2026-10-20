@@ -4,6 +4,7 @@ import {
   MATCH_REASON_LABELS,
   formatAddress,
   formatCoordinateBasis,
+  formatPermitCounts,
   formatRoofAge,
   formatRoofAnchor,
   formatRoofBasis,
@@ -17,8 +18,9 @@ export interface PropertyRowProps {
 }
 
 /**
- * One matching roof: why it matched, the roof age with its basis, confidence, anchor, as-of date and
- * caveats, the coordinates and the source record (docs/decisions.md §4 and the 2026-10-17 entry).
+ * One matching roof, which opens its detail drawer: why it matched, its roofing permits by status,
+ * the roof age with its basis, confidence, anchor, as-of date and caveats, the coordinates and the
+ * source record (docs/decisions.md §4 and the 2026-10-17 entry).
  * All text is rendered as text; nothing from the record is interpreted as markup.
  */
 export function PropertyRow({ property, selected, onSelect }: PropertyRowProps) {
@@ -26,6 +28,7 @@ export function PropertyRow({ property, selected, onSelect }: PropertyRowProps) 
   const anchor = formatRoofAnchor(property.roof_age_anchor);
   const sourceUrl = safeHttpUrl(property.source.url);
   const coordinateBasis = formatCoordinateBasis(property.coordinate_basis);
+  const permitCounts = formatPermitCounts(property.roofing_permit_counts);
 
   return (
     <li
@@ -36,14 +39,20 @@ export function PropertyRow({ property, selected, onSelect }: PropertyRowProps) 
         type="button"
         className="result-select"
         aria-pressed={selected}
+        title="Show the property, its permits and owner"
         onClick={() => {
           onSelect(property.property_id);
         }}
       >
         <span className="result-address">{formatAddress(property.address)}</span>
-        {property.distance_miles !== null && property.distance_miles !== undefined ? (
-          <span className="result-distance">{formatMiles(property.distance_miles)}</span>
-        ) : null}
+        <span className="result-distance">
+          {property.distance_miles !== null && property.distance_miles !== undefined
+            ? formatMiles(property.distance_miles)
+            : null}
+          <span className="result-chevron" aria-hidden="true">
+            ›
+          </span>
+        </span>
       </button>
 
       {property.match_reasons && property.match_reasons.length > 0 ? (
@@ -60,6 +69,7 @@ export function PropertyRow({ property, selected, onSelect }: PropertyRowProps) 
         <strong>{formatRoofAge(property)}</strong>
         {basis ? ` · ${basis}` : null}
       </p>
+      {permitCounts ? <p className="result-permits">Roofing permits: {permitCounts}</p> : null}
       <p className="result-meta">
         {property.roof_age_confidence} confidence · as of {property.roof_age_as_of}
         {anchor ? ` · anchored on ${anchor}` : null}

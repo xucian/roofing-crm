@@ -4,10 +4,17 @@ export {
   DEFAULT_COUNTY,
   MAP_BOUNDS,
   MAP_RESULT_LIMIT,
+  PERMIT_SIGNAL,
   RADIUS_MILES,
   ROOF_AGE_THRESHOLD_YEARS,
 } from './defaults';
-export { formatCoordinates, formatCount, formatMatchSummary, formatMiles } from './format';
+export {
+  formatCoordinates,
+  formatCount,
+  formatDays,
+  formatMatchSummary,
+  formatMiles,
+} from './format';
 export {
   EARTH_RADIUS_MILES,
   circlePolygon,

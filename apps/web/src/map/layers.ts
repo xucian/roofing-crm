@@ -1,7 +1,12 @@
 import type { PropertySummary } from '@roofing-crm/pipeline-client';
 import { circleRing, type GeoPoint } from '@roofing-crm/shared';
 import type { Feature, FeatureCollection, Point, Polygon } from 'geojson';
-import type { GeoJSONSourceSpecification, LayerSpecification } from 'maplibre-gl';
+import type {
+  DataDrivenPropertyValueSpecification,
+  ExpressionSpecification,
+  GeoJSONSourceSpecification,
+  LayerSpecification,
+} from 'maplibre-gl';
 
 export const SEARCH_AREA_SOURCE = 'search-area';
 export const RESULTS_SOURCE = 'results';
@@ -15,15 +20,39 @@ export const MAP_COLORS = {
   accent: '#0f766e',
   aged: '#c2410c',
   agedCluster: '#9a3412',
+  permit: '#7c3aed',
+  permitCluster: '#5b21b6',
+  longOpen: '#be123c',
+  longOpenCluster: '#9f1239',
   halo: '#ffffff',
 } as const;
 
 /** One of the basemap's self-hosted font stacks (scripts/basemap.ts), so no glyph request leaves the origin. */
 export const LABEL_FONT = ['Noto Sans Medium'];
 
-/** A matching property on the map: its position and the id that links the marker to its list row. */
-export type ResultFeature = Feature<Point, { id: string }>;
-export type ResultCollection = FeatureCollection<Point, { id: string }>;
+/**
+ * The strongest lead signal of a match, which colors its marker: a long-open roofing permit, then
+ * an open or stalled one, then an aged roof (README AC 5: emphasis on long-open permits).
+ */
+export type ResultSignal = 'long_open' | 'permit' | 'aged';
+
+export function resultSignal(item: Pick<PropertySummary, 'match_reasons'>): ResultSignal {
+  const reasons = item.match_reasons ?? [];
+  if (reasons.includes('long_open_roofing_permit')) return 'long_open';
+  if (reasons.includes('open_roofing_permit') || reasons.includes('stalled_roofing_permit')) {
+    return 'permit';
+  }
+  return 'aged';
+}
+
+interface ResultProperties {
+  id: string;
+  signal: ResultSignal;
+}
+
+/** A matching property on the map: its position, its signal and the id that links it to its row. */
+export type ResultFeature = Feature<Point, ResultProperties>;
+export type ResultCollection = FeatureCollection<Point, ResultProperties>;
 
 export const NO_RESULTS: ResultCollection = { type: 'FeatureCollection', features: [] };
 
@@ -34,12 +63,39 @@ export function resultFeatures(items: readonly PropertySummary[]): ResultCollect
     if (item.lat === null || item.lon === null) continue;
     features.push({
       type: 'Feature',
-      properties: { id: item.property_id },
+      properties: { id: item.property_id, signal: resultSignal(item) },
       geometry: { type: 'Point', coordinates: [item.lon, item.lat] },
     });
   }
   return { type: 'FeatureCollection', features };
 }
+
+const SIGNAL: ExpressionSpecification = ['get', 'signal'];
+
+const signalColor: DataDrivenPropertyValueSpecification<string> = [
+  'match',
+  SIGNAL,
+  'long_open',
+  MAP_COLORS.longOpen,
+  'permit',
+  MAP_COLORS.permit,
+  MAP_COLORS.aged,
+];
+
+/** A cluster takes the color of the strongest signal inside it. */
+const clusterColor: DataDrivenPropertyValueSpecification<string> = [
+  'case',
+  ['>', ['get', 'longOpen'], 0],
+  MAP_COLORS.longOpenCluster,
+  ['>', ['get', 'permit'], 0],
+  MAP_COLORS.permitCluster,
+  MAP_COLORS.agedCluster,
+];
+
+const countOf = (signal: ResultSignal): ExpressionSpecification => [
+  '+',
+  ['case', ['==', SIGNAL, signal], 1, 0],
+];
 
 /** The selected row's marker, drawn above the clusters so it shows even inside one. */
 export function selectedFeature(
@@ -89,7 +145,14 @@ export const searchAreaLayers: LayerSpecification[] = [
 
 /** Matches are clustered so the first 500 stay readable at county zoom (docs/decisions.md §4 "Scale"). */
 export function resultsSource(data: ResultCollection = NO_RESULTS): GeoJSONSourceSpecification {
-  return { type: 'geojson', data, cluster: true, clusterRadius: 44, clusterMaxZoom: 15 };
+  return {
+    type: 'geojson',
+    data,
+    cluster: true,
+    clusterRadius: 44,
+    clusterMaxZoom: 15,
+    clusterProperties: { longOpen: countOf('long_open'), permit: countOf('permit') },
+  };
 }
 
 export const resultsLayers: LayerSpecification[] = [
@@ -99,7 +162,7 @@ export const resultsLayers: LayerSpecification[] = [
     source: RESULTS_SOURCE,
     filter: ['has', 'point_count'],
     paint: {
-      'circle-color': MAP_COLORS.agedCluster,
+      'circle-color': clusterColor,
       'circle-opacity': 0.88,
       'circle-radius': ['step', ['get', 'point_count'], 14, 25, 18, 100, 23],
       'circle-stroke-color': MAP_COLORS.halo,
@@ -124,8 +187,10 @@ export const resultsLayers: LayerSpecification[] = [
     type: 'circle',
     source: RESULTS_SOURCE,
     filter: ['!', ['has', 'point_count']],
+    // Long-open permits are drawn above the rest where markers overlap.
+    layout: { 'circle-sort-key': ['match', SIGNAL, 'long_open', 2, 'permit', 1, 0] },
     paint: {
-      'circle-color': MAP_COLORS.aged,
+      'circle-color': signalColor,
       'circle-radius': 6,
       'circle-stroke-color': MAP_COLORS.halo,
       'circle-stroke-width': 1.5,
@@ -138,7 +203,7 @@ export const selectedLayer: LayerSpecification = {
   type: 'circle',
   source: SELECTED_SOURCE,
   paint: {
-    'circle-color': MAP_COLORS.aged,
+    'circle-color': signalColor,
     'circle-radius': 9,
     'circle-stroke-color': MAP_COLORS.accent,
     'circle-stroke-width': 3,

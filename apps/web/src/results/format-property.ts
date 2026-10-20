@@ -66,6 +66,21 @@ export function formatCoordinateBasis(basis: PropertySummary['coordinate_basis']
   }
 }
 
+/** "1 open, 2 closed": the property's roofing permits by group, or null when it has none. */
+export function formatPermitCounts(
+  counts: PropertySummary['roofing_permit_counts'],
+): string | null {
+  const parts = [
+    { count: counts.open, label: 'open' },
+    { count: counts.stalled, label: 'stalled' },
+    { count: counts.closed, label: 'closed' },
+    { count: counts.needs_review, label: 'need review' },
+  ]
+    .filter((part) => part.count > 0)
+    .map((part) => `${String(part.count)} ${part.label}`);
+  return parts.length === 0 ? null : parts.join(', ');
+}
+
 /** Only http(s) links are rendered; anything else stays plain text. */
 export function safeHttpUrl(value: string): string | null {
   try {

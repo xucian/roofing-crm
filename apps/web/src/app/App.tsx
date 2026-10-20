@@ -9,6 +9,9 @@ import {
 } from '@roofing-crm/shared';
 import { useMemo, useRef, useState } from 'react';
 import type { RuntimeConfig } from '../config/runtime-config';
+import { PropertyDrawer } from '../details/PropertyDrawer';
+import { useOpenProperty } from '../details/use-open-property';
+import { usePropertyDetail } from '../details/use-property-detail';
 import { Legend } from '../map/Legend';
 import { MapView } from '../map/MapView';
 import { NO_RESULTS, resultFeatures } from '../map/layers';
@@ -35,7 +38,8 @@ export function App({ config }: { config: RuntimeConfig }) {
   const [locating, setLocating] = useState(false);
   const [notice, setNotice] = useState<Notice | null>(null);
   const [mapProblem, setMapProblem] = useState<string | null>(null);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [openId, setOpenId] = useOpenProperty();
+  const [selectedId, setSelectedId] = useState<string | null>(openId);
   const beforeGps = useRef<{ center: GeoPoint; centerSource: CenterSource } | null>(null);
 
   const connection = useMemo(
@@ -61,10 +65,13 @@ export function App({ config }: { config: RuntimeConfig }) {
   };
   const propertySearch = usePropertySearch(client, search, onAnswer);
   const { view } = propertySearch;
+  const detail = usePropertyDetail(client, openId);
 
   const shown =
     view.kind === 'ready' ? view.results : view.kind === 'loading' ? view.previous : null;
   const markers = useMemo(() => (shown ? resultFeatures(shown.mapItems) : NO_RESULTS), [shown]);
+  const openSummary =
+    openId === null ? undefined : shown?.items.find((item) => item.property_id === openId);
 
   // A fix outside the county keeps the current center and says so (docs/decisions.md §4). Outside the
   // map's extent is decided here; the server's area_note decides the margin inside it.
@@ -91,8 +98,13 @@ export function App({ config }: { config: RuntimeConfig }) {
     dispatch({ type: 'gps', point: outcome.point });
   };
 
-  const selectRow = (propertyId: string): void => {
+  // A row or a marker opens its property in the drawer and highlights the other.
+  const openProperty = (propertyId: string): void => {
     setSelectedId(propertyId);
+    setOpenId(propertyId);
+  };
+  const openFromMap = (propertyId: string): void => {
+    openProperty(propertyId);
     document
       .getElementById(`result-${propertyId}`)
       ?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
@@ -108,7 +120,7 @@ export function App({ config }: { config: RuntimeConfig }) {
         <span className="county-badge">{DEFAULT_COUNTY.label}</span>
       </header>
       <Nav />
-      <main className="app-main">
+      <main className={openId === null ? 'app-main' : 'app-main app-main--detail'}>
         <section className="map-pane" aria-label="Map">
           <MapView
             center={search.center}
@@ -120,7 +132,7 @@ export function App({ config }: { config: RuntimeConfig }) {
               setNotice(null);
               dispatch({ type: 'pin', point });
             }}
-            onSelect={selectRow}
+            onSelect={openFromMap}
             onProblem={setMapProblem}
           />
           <div className="map-overlays">
@@ -140,8 +152,17 @@ export function App({ config }: { config: RuntimeConfig }) {
               </Callout>
             ) : null}
           </div>
-          <Legend roofAgeMin={search.roofAgeMin} />
+          <Legend roofAgeMin={search.roofAgeMin} openPermits={search.openPermits} />
         </section>
+        {client && openId !== null ? (
+          <PropertyDrawer
+            loader={detail}
+            summary={openSummary}
+            onClose={() => {
+              setOpenId(null);
+            }}
+          />
+        ) : null}
         <aside className="side-panel" aria-label="Search and results">
           <SearchPanel
             search={search}
@@ -165,8 +186,9 @@ export function App({ config }: { config: RuntimeConfig }) {
             search={client ? propertySearch : null}
             retry={retry}
             roofAgeMin={search.roofAgeMin}
+            openPermits={search.openPermits}
             selectedId={selectedId}
-            onSelect={setSelectedId}
+            onSelect={openProperty}
           />
         </aside>
       </main>

@@ -1,9 +1,12 @@
 import { BASEMAP_FONT_STACKS, BASEMAP_PATHS, greatCircleMiles } from '@roofing-crm/shared';
 import { describe, expect, it } from 'vitest';
 import { buildBasemapStyle } from './basemap-style';
+import { fixtureProperty } from '../test/fixtures';
 import {
   LABEL_FONT,
   RESULTS_CLUSTER_COUNT_LAYER,
+  resultFeatures,
+  resultSignal,
   resultsLayers,
   resultsSource,
   searchAreaBounds,
@@ -75,5 +78,32 @@ describe('search area and results layers', () => {
     expect(resultsSource()).toMatchObject({ type: 'geojson', cluster: true });
     const count = resultsLayers.find((layer) => layer.id === RESULTS_CLUSTER_COUNT_LAYER);
     expect(count?.layout).toMatchObject({ 'text-font': ['Noto Sans Medium'] });
+  });
+});
+
+describe('marker signals', () => {
+  it('ranks a long-open permit over an open or stalled one over an aged roof', () => {
+    expect(
+      resultSignal({
+        match_reasons: ['aged_roof', 'open_roofing_permit', 'long_open_roofing_permit'],
+      }),
+    ).toBe('long_open');
+    expect(resultSignal({ match_reasons: ['aged_roof', 'open_roofing_permit'] })).toBe('permit');
+    expect(resultSignal({ match_reasons: ['stalled_roofing_permit'] })).toBe('permit');
+    expect(resultSignal({ match_reasons: ['aged_roof'] })).toBe('aged');
+    expect(resultSignal({})).toBe('aged');
+  });
+
+  it('puts the signal on each marker and counts long-open and permit markers per cluster', () => {
+    const features = resultFeatures([
+      fixtureProperty(1, { match_reasons: ['open_roofing_permit', 'long_open_roofing_permit'] }),
+      fixtureProperty(2, { lat: null, lon: null }),
+      fixtureProperty(3),
+    ]).features;
+    expect(features.map((feature) => feature.properties)).toEqual([
+      { id: 'fx-1', signal: 'long_open' },
+      { id: 'fx-3', signal: 'aged' },
+    ]);
+    expect(Object.keys(resultsSource().clusterProperties ?? {})).toEqual(['longOpen', 'permit']);
   });
 });

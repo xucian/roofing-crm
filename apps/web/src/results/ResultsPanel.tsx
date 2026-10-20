@@ -1,9 +1,8 @@
 import type { RetryEvent } from '@roofing-crm/pipeline-client';
 import { formatCount, formatMatchSummary } from '@roofing-crm/shared';
-import { useEffect, useState } from 'react';
 import { Callout } from '../app/Callout';
 import { ErrorDetails } from '../app/ErrorDetails';
-import { WakeHint } from '../app/WakeHint';
+import { PipelineWait } from '../app/PipelineWait';
 import { describeRetry } from '../pipeline/connection';
 import { PropertyRow } from './PropertyRow';
 import type { SearchResults } from './property-search';
@@ -14,6 +13,7 @@ export interface ResultsPanelProps {
   search: PropertySearch | null;
   retry: RetryEvent | null;
   roofAgeMin: number;
+  openPermits: boolean;
   selectedId: string | null;
   onSelect: (propertyId: string) => void;
 }
@@ -26,6 +26,7 @@ export function ResultsPanel({
   search,
   retry,
   roofAgeMin,
+  openPermits,
   selectedId,
   onSelect,
 }: ResultsPanelProps) {
@@ -44,6 +45,7 @@ export function ResultsPanel({
           search={search}
           retry={retry}
           roofAgeMin={roofAgeMin}
+          openPermits={openPermits}
           selectedId={selectedId}
           onSelect={onSelect}
         />
@@ -56,6 +58,7 @@ function Results({
   search,
   retry,
   roofAgeMin,
+  openPermits,
   selectedId,
   onSelect,
 }: ResultsPanelProps & { search: PropertySearch }) {
@@ -88,12 +91,18 @@ function Results({
 
       {view.kind === 'loading' ? (
         <>
-          <Searching key={view.startedAt ?? 'waiting'} started={view.startedAt !== null} />
+          <PipelineWait
+            key={view.startedAt ?? 'waiting'}
+            title="Searching the pipeline…"
+            what="search"
+            started={view.startedAt !== null}
+          />
           {view.previous ? (
             <div className="results-stale" aria-hidden="true">
               <ResultsList
                 results={view.previous}
                 roofAgeMin={roofAgeMin}
+                openPermits={openPermits}
                 selectedId={selectedId}
                 onSelect={onSelect}
               />
@@ -107,6 +116,7 @@ function Results({
           <ResultsList
             results={view.results}
             roofAgeMin={roofAgeMin}
+            openPermits={openPermits}
             selectedId={selectedId}
             onSelect={onSelect}
           />
@@ -139,11 +149,13 @@ function Results({
 function ResultsList({
   results,
   roofAgeMin,
+  openPermits,
   selectedId,
   onSelect,
 }: {
   results: SearchResults;
   roofAgeMin: number;
+  openPermits: boolean;
   selectedId: string | null;
   onSelect: (propertyId: string) => void;
 }) {
@@ -163,11 +175,7 @@ function ResultsList({
           into Travis County.
         </Callout>
       ) : results.total === 0 ? (
-        <p className="field-hint">
-          {roofAgeMin > 0
-            ? `No roof in this radius is older than ${String(roofAgeMin)} years. Widen the radius or lower the threshold.`
-            : 'No property in this radius. Widen the radius.'}
-        </p>
+        <p className="field-hint">{emptyHint(roofAgeMin, openPermits)}</p>
       ) : null}
       <ol className="results-list">
         {results.items.map((property) => (
@@ -183,27 +191,10 @@ function ResultsList({
   );
 }
 
-/** The loading state: a cold pipeline can take several seconds, so the wait is counted and explained. */
-function Searching({ started }: { started: boolean }) {
-  const [seconds, setSeconds] = useState(0);
-  useEffect(() => {
-    if (!started) return undefined;
-    const timer = window.setInterval(() => {
-      setSeconds((value) => value + 1);
-    }, 1000);
-    return () => {
-      window.clearInterval(timer);
-    };
-  }, [started]);
-  return (
-    <div className="results-loading" role="status">
-      <span className="spinner" aria-hidden="true" />
-      <div>
-        <p className="results-loading-title">
-          Searching the pipeline…{seconds > 0 ? ` ${String(seconds)} s` : null}
-        </p>
-        {started ? <WakeHint what="search" /> : null}
-      </div>
-    </div>
-  );
+function emptyHint(roofAgeMin: number, openPermits: boolean): string {
+  if (roofAgeMin === 0) return 'No property in this radius. Widen the radius.';
+  const aged = `No roof in this radius is older than ${String(roofAgeMin)} years`;
+  return openPermits
+    ? `${aged}, and none has an open or stalled roofing permit. Widen the radius or lower the threshold.`
+    : `${aged}. Widen the radius, lower the threshold or turn on open permits.`;
 }
