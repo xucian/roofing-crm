@@ -328,3 +328,54 @@ bundled.
 The operator accepted the proposal above: the place box (§7) is part of F1's post-T7 work. It calls
 `/v1/search-centers` through the pinned client, moves the center to the chosen match, shows its `match_type` and
 asks which place was meant when no match is exact (2026-10-17 sync entry).
+
+## 2026-10-20 — Contract pinned; F1 completed for the pipeline's account
+
+The pipeline handed over `API_BASE` and its contract on 2026-10-20. Contract v1 is unchanged. On the new AWS account,
+cold property and permit searches time out, so the pipeline is replacing its baked DuckDB file with Parquet served from
+its private deploy bucket (its T7 correction). The handoff gives the cold times expected afterwards: about 7 to 8 s for
+F1's default search and about 3 s for details. F1's remaining steps are built and checked locally. Its live check waits
+for the pipeline's "T7 correction live" notice. Where this entry differs from earlier text, this entry wins.
+
+- **Pin.** `packages/contract/openapi.json` is pinned at pipeline commit `56b020c` (sha256 `7d8ece68…`), byte-identical
+  to the served `GET /v1/openapi.json`. The pipeline's later commits do not change the file. `API_BASE` is
+  `https://733jzm4xv4.execute-api.us-east-2.amazonaws.com` (`docs/runbook.md`, the operator's `.env`; the CI variable
+  is set by the operator).
+- **Typed client.** `packages/pipeline-client` adds openapi-fetch 0.17 over the existing transport, with `getMeta`,
+  `searchProperties` and `searchCenters` typed by the generated file. The operations return the data with its
+  `x-request-id`, and every failure is the transport's `PipelineError`. A type-level test fails to compile if the pinned
+  error schemas lose `error` or `request_id`.
+- **Transport, for this account** (amends the 2026-10-17 "Transport" bullet):
+  - The browser waits 29 s per attempt, not 15 s. That covers a cold search, stays above the pipeline function's 25 s
+    limit and stays under API Gateway's 30 s cut.
+  - A 503, which can be the account-wide Lambda throttle, is a 5xx and is retried once, as before.
+  - A request that fails with no readable response after more than 5 s is retried once like a 5xx. It was admitted and
+    then failed, so the 1 s, 2 s, 4 s throttle schedule no longer applies. A fast failure keeps that schedule, because
+    it is how a gateway 429 without CORS headers looks.
+  - The Lambda timeout (8 s) is not changed in F1; F3 checks it against the measured detail times.
+- **No fan-out.** The account runs 10 Lambda executions at once, shared by the pipeline API, the pipeline chat and the
+  CRM. The page therefore sends its pipeline calls through one queue (`serializeFetch`), so one call is in flight at a
+  time:
+  - `/v1/meta` for the footer is read after the first search settles, so the default search goes first.
+  - A newer search cancels the older one, and radius, threshold and center changes wait 400 ms for the next change.
+  - F3's `createMany` and F5's tool loop follow the same rule. Their bounded concurrency is 1 until the account's
+    increase lands.
+- **Loading and retry states.** While a search runs, the list shows how many seconds it has taken and, after 3 s, that a
+  cold pipeline takes longer. During a back-off, a "Pipeline busy, retrying" notice names the cause and the wait. When
+  the query changes, the previous rows stay dimmed until the new answer arrives.
+- **GPS inside the map's box but outside the county** (completes the 2026-10-17 GPS bullet). When the search answers
+  with an `area_note`, the center goes back to where it was and the notice quotes the note. A pin dropped there keeps
+  the pin, and the list shows the note.
+- **Place box.** A single exact match moves the center at once. Otherwise each match is listed with its kind,
+  `match_type` and parcel count, and the user picks one. Two exact matches also ask. No match says so.
+- **Footer.** Shows the run id and the manifest CID. The group CIDs fold into a list: the current run has 177 groups.
+  Atlas shows "not published yet" while `atlas` is null.
+- **Markers and rows.** The map draws the first page (500). "Load more" appends further pages to the list only, and the
+  list says so. A marker click selects its row, a row click highlights its marker, and the selected marker is drawn
+  above the clusters.
+- **Tests and fixtures.** The web tests stub `fetch` with synthetic records in the contract's shapes: `FIXTURE`
+  addresses, `fx-` ids and example.org URLs. No county data enters the repository (§1, §8). A local visual check ran the
+  production bundle, under the deployed CSP, against a throwaway fake pipeline in the session scratchpad. That fake is
+  not part of the repository.
+- **Still open.** Bedrock access on this account was blocked on 2026-10-16. F5 checks it first, as the pipeline's T9
+  does.

@@ -10,7 +10,7 @@ import {
 } from '@roofing-crm/shared';
 
 /** Where the search center came from; decides whether the camera follows it. */
-export type CenterSource = 'default' | 'link' | 'pin' | 'gps';
+export type CenterSource = 'default' | 'link' | 'pin' | 'gps' | 'place';
 
 export interface SearchState {
   center: GeoPoint;
@@ -23,6 +23,10 @@ export interface SearchState {
 export type SearchAction =
   | { type: 'pin'; point: GeoPoint }
   | { type: 'gps'; point: GeoPoint }
+  /** A search center chosen in the place box (`/v1/search-centers`). */
+  | { type: 'place'; point: GeoPoint }
+  /** Puts back an earlier center, e.g. when the server says a GPS fix is outside the county. */
+  | { type: 'restore'; center: GeoPoint; centerSource: CenterSource }
   | { type: 'radius'; miles: number }
   | { type: 'roofAgeMin'; years: number }
   | { type: 'reset' };
@@ -93,6 +97,10 @@ export function searchReducer(state: SearchState, action: SearchAction): SearchS
       return { ...state, center: normalizePoint(action.point), centerSource: 'pin' };
     case 'gps':
       return { ...state, center: normalizePoint(action.point), centerSource: 'gps' };
+    case 'place':
+      return { ...state, center: normalizePoint(action.point), centerSource: 'place' };
+    case 'restore':
+      return { ...state, center: normalizePoint(action.center), centerSource: action.centerSource };
     case 'radius':
       return { ...state, radiusMiles: normalizeRadius(action.miles) };
     case 'roofAgeMin':
@@ -113,5 +121,7 @@ export function centerLabel(source: CenterSource): string {
       return 'Dropped pin';
     case 'gps':
       return 'Your location';
+    case 'place':
+      return 'Place from the search box';
   }
 }

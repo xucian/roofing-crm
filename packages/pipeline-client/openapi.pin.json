@@ -2,7 +2,7 @@
   "$comment": "Pins the pipeline API v1 contract by commit: the pipeline's committed openapi.json is normative and the generated types come only from it. Pending until the pipeline's T7 first commit lands; then run `pnpm --filter @roofing-crm/pipeline-client pin <commit> <path>`.",
   "repository": "https://github.com/xucian/oracle-property-intelligence-platform-pipeline-travis-tx",
   "contractFrozenAt": "de08901",
-  "commit": null,
-  "path": null,
-  "sha256": null
+  "commit": "56b020c483d8197b15570275399e51ba512fca1d",
+  "path": "packages/contract/openapi.json",
+  "sha256": "7d8ece6832aa5f618c2d2bff0b68edad139700fbe37c8c1b58e7b9be75db48bc"
 }

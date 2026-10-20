@@ -299,10 +299,18 @@ code {
   background: var(--color-surface);
 }
 
+.field-input--wide {
+  flex: 1;
+  width: auto;
+  min-width: 0;
+}
+
 .field-input:focus-visible,
 .field-range:focus-visible,
 .button:focus-visible,
-.callout-dismiss:focus-visible {
+.callout-dismiss:focus-visible,
+.result-select:focus-visible,
+.place-choice:focus-visible {
   outline: 2px solid var(--color-accent);
   outline-offset: 2px;
 }
@@ -405,6 +413,179 @@ code {
   box-shadow: none;
 }
 
+/* Place box */
+
+.place-box {
+  display: grid;
+  gap: 6px;
+}
+
+.place-choices {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.place-choice {
+  padding: 6px 10px;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background: var(--color-surface);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.place-choice:hover {
+  background: var(--color-surface-muted);
+}
+
+/* Results */
+
+.results-summary {
+  font-weight: 650;
+}
+
+.results-loading {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  background: var(--color-surface-muted);
+}
+
+.results-loading-title {
+  font-weight: 600;
+}
+
+.spinner {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  margin-top: 1px;
+  border: 2.5px solid var(--color-accent-weak);
+  border-top-color: var(--color-accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spinner {
+    animation-duration: 2.4s;
+  }
+}
+
+.results-stale {
+  display: grid;
+  gap: 10px;
+  opacity: 0.45;
+  pointer-events: none;
+}
+
+.results-list {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.result-row {
+  display: grid;
+  gap: 4px;
+  padding: 10px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  background: var(--color-surface);
+  scroll-margin: 12px;
+}
+
+.result-row--selected {
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 1px var(--color-accent);
+}
+
+.result-select {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.result-address {
+  font-weight: 650;
+}
+
+.result-select:hover .result-address {
+  color: var(--color-accent-strong);
+  text-decoration: underline;
+}
+
+.result-distance {
+  flex: none;
+  color: var(--color-muted);
+  font-size: 12.5px;
+}
+
+.result-reasons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.reason {
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--color-surface-muted);
+  border: 1px solid var(--color-border);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.reason--aged_roof {
+  background: #fff1e8;
+  border-color: #f5b48f;
+  color: var(--color-aged-cluster);
+}
+
+.result-meta,
+.result-caveats,
+.results-request,
+.error-detail {
+  color: var(--color-muted);
+  font-size: 12.5px;
+  overflow-wrap: anywhere;
+}
+
+.result-caveats {
+  margin: 0;
+  padding-left: 18px;
+}
+
+.result-meta a {
+  color: var(--color-accent-strong);
+}
+
 /* Footer */
 
 .app-footer {
@@ -420,8 +601,50 @@ code {
   font-size: 12px;
 }
 
-.app-footer-pending {
+.app-footer-grow {
   flex: 1;
+}
+
+.footer-groups {
+  position: relative;
+}
+
+.footer-groups summary {
+  cursor: pointer;
+}
+
+.footer-groups-list {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 0;
+  z-index: 10;
+  display: grid;
+  gap: 2px;
+  width: min(560px, 90vw);
+  max-height: 50vh;
+  margin: 0;
+  padding: 10px 12px;
+  overflow-y: auto;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  background: var(--color-surface);
+  box-shadow: var(--shadow);
+}
+
+.footer-groups-list div {
+  display: flex;
+  gap: 10px;
+}
+
+.footer-groups-list dt {
+  flex: none;
+  width: 104px;
+  font-weight: 600;
+}
+
+.footer-groups-list dd {
+  margin: 0;
+  overflow-wrap: anywhere;
 }
 
 /* Startup failure */

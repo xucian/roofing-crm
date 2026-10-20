@@ -17,11 +17,15 @@ import {
   RESULTS_POINT_LAYER,
   RESULTS_SOURCE,
   SEARCH_AREA_SOURCE,
+  SELECTED_SOURCE,
   resultsLayers,
   resultsSource,
   searchAreaBounds,
   searchAreaData,
   searchAreaLayers,
+  selectedFeature,
+  selectedLayer,
+  NO_RESULTS,
   type ResultCollection,
 } from './layers';
 import { setupMapLibre } from './maplibre-setup';
@@ -31,8 +35,12 @@ export interface MapViewProps {
   centerSource: CenterSource;
   radiusMiles: number;
   results: ResultCollection;
+  /** The list row whose marker is highlighted. */
+  selectedId: string | null;
   /** A click on empty map or a dragged pin: the new search center. */
   onPick: (point: GeoPoint) => void;
+  /** A click on a match marker: selects its list row. */
+  onSelect: (propertyId: string) => void;
   /** The map or its basemap failed; the message is shown over the map. */
   onProblem: (message: string) => void;
 }
@@ -53,7 +61,9 @@ export function MapView({
   centerSource,
   radiusMiles,
   results,
+  selectedId,
   onPick,
+  onSelect,
   onProblem,
 }: MapViewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -62,6 +72,7 @@ export function MapView({
   const [map, setMap] = useState<MapLibreMap | null>(null);
   const [initial] = useState(() => ({ center, radiusMiles }));
   const pick = useEffectEvent(onPick);
+  const select = useEffectEvent(onSelect);
   const problem = useEffectEvent(onProblem);
 
   // Create the map once; React state flows in through the effects below.
@@ -117,6 +128,8 @@ export function MapView({
       for (const layer of searchAreaLayers) instance.addLayer(layer);
       instance.addSource(RESULTS_SOURCE, resultsSource());
       for (const layer of resultsLayers) instance.addLayer(layer);
+      instance.addSource(SELECTED_SOURCE, { type: 'geojson', data: NO_RESULTS });
+      instance.addLayer(selectedLayer);
       setMap(instance);
     });
 
@@ -135,7 +148,9 @@ export function MapView({
         });
         return;
       }
-      // A click on a match marker never moves the search center.
+      // A click on a match marker selects its row and never moves the search center.
+      const id: unknown = hits[0]?.properties.id;
+      if (typeof id === 'string') select(id);
       if (hits.length > 0) return;
       pick({ lat: event.lngLat.lat, lon: event.lngLat.lng });
     });
@@ -212,6 +227,16 @@ export function MapView({
         problem(`The matches could not be drawn on the map (${errorText(error)}).`);
       });
   }, [map, results]);
+
+  // The selected row's marker.
+  useEffect(() => {
+    map
+      ?.getSource<GeoJSONSource>(SELECTED_SOURCE)
+      ?.setData(selectedFeature(results, selectedId))
+      .catch((error: unknown) => {
+        problem(`The selected match could not be drawn (${errorText(error)}).`);
+      });
+  }, [map, results, selectedId]);
 
   return (
     <div

@@ -1,5 +1,5 @@
 import { RADIUS_MILES, ROOF_AGE_THRESHOLD_YEARS, formatCoordinates } from '@roofing-crm/shared';
-import type { Dispatch } from 'react';
+import type { Dispatch, ReactNode } from 'react';
 import { NumberField } from './NumberField';
 import { centerLabel, type SearchAction, type SearchState } from './search-state';
 
@@ -8,9 +8,11 @@ export interface SearchPanelProps {
   dispatch: Dispatch<SearchAction>;
   locating: boolean;
   onLocate: () => void;
+  /** The place box, shown under the center. */
+  place?: ReactNode;
 }
 
-export function SearchPanel({ search, dispatch, locating, onLocate }: SearchPanelProps) {
+export function SearchPanel({ search, dispatch, locating, onLocate, place }: SearchPanelProps) {
   return (
     <section className="panel-section" aria-labelledby="search-heading">
       <h2 id="search-heading" className="panel-heading">
@@ -29,6 +31,7 @@ export function SearchPanel({ search, dispatch, locating, onLocate }: SearchPane
         </button>
       </div>
       <p className="field-hint">Click the map or drag the pin to move the center.</p>
+      {place}
 
       <NumberField
         id="radius"

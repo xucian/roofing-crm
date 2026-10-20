@@ -4,14 +4,23 @@ Deploy from a clean clone, local preview, and the facts the kit cannot put in `R
 
 ## Pipeline API (`API_BASE`)
 
-- `API_BASE`: **not published yet.** The pipeline's T7 (hosted query layer) publishes it in the pipeline's
-  `docs/runbook.md` and PR body. It is then copied here, into the operator's `.env` as `PIPELINE_API_BASE`, into the
-  GitHub repository variable `PIPELINE_API_BASE` (CI's served-contract check) and into the PR.
-- Contract pin: **pending** (`packages/pipeline-client/openapi.pin.json`). Once T7 commits `openapi.json`, run
-  `pnpm --filter @roofing-crm/pipeline-client pin <commit> <path-of-openapi.json>`. It reads the file at that commit from
-  the local clone `../oracle-property-intelligence-platform-pipeline-travis-tx` (or from GitHub), never writes there, and
-  generates the client types. Commit `openapi.pin.json`, `openapi/openapi.json` and `src/generated/pipeline-api.ts`
-  together.
+- `API_BASE`: **https://733jzm4xv4.execute-api.us-east-2.amazonaws.com** (pipeline account 561303652468, us-east-2;
+  from the pipeline's handoff of 2026-10-20, stable across its T7 storage correction). It is in the operator's `.env` as
+  `PIPELINE_API_BASE`. Still to do by the operator: the GitHub repository variable of the same name, for CI's
+  served-contract check:
+  `gh variable set PIPELINE_API_BASE --repo xucian/roofing-crm --body https://733jzm4xv4.execute-api.us-east-2.amazonaws.com`.
+- Contract pin: `packages/contract/openapi.json` at pipeline commit `56b020c483d8197b15570275399e51ba512fca1d`, sha256
+  `7d8ece6832aa5f618c2d2bff0b68edad139700fbe37c8c1b58e7b9be75db48bc` (`packages/pipeline-client/openapi.pin.json`). The
+  served `GET {API_BASE}/v1/openapi.json` had the same bytes on 2026-10-20. To re-pin after a contract change, run
+  `pnpm --filter @roofing-crm/pipeline-client pin <commit> packages/contract/openapi.json`. It reads the file at that
+  commit from the local clone `../oracle-property-intelligence-platform-pipeline-travis-tx` (or from GitHub), never
+  writes there, and generates the client types. Commit `openapi.pin.json`, `openapi/openapi.json` and
+  `src/generated/pipeline-api.ts` together. `pnpm --filter @roofing-crm/pipeline-client check:served` (with
+  `PIPELINE_API_BASE` set) compares the pin with the served contract.
+- The pipeline's account (pipeline handoff, 2026-10-20): it runs 10 Lambda executions at once in total, shared by the
+  pipeline API, the pipeline chat and this CRM's own functions, and caps functions at 3008 MB. A cold search takes
+  about 7 to 8 s once the pipeline's T7 correction is live. The CRM therefore keeps one pipeline call in flight per
+  page, waits up to 29 s per attempt, and shows a loading state on the default search.
 
 ## Prerequisites (operator machine)
 
@@ -30,12 +39,12 @@ corepack enable
 pnpm install --frozen-lockfile
 pnpm check          # format, lint, typecheck, tests, build, cdk synth, contract pin: what CI runs
 pnpm basemap        # basemap/: Travis extract, glyphs, sprites, SOURCE.json (about 85 MB, a minute or two)
-cp .env.example .env   # then set PIPELINE_API_BASE to API_BASE
+cp .env.example .env   # then set PIPELINE_API_BASE to API_BASE (above)
 export AWS_PROFILE=<profile>
 pnpm deploy:aws     # checks, shows the account and region, asks, builds, deploys, prints the URL
 ```
 
-`pnpm deploy:aws` stops, before any AWS call, while the contract pin is pending. It also stops when the served
+`pnpm deploy:aws` stops, before any AWS call, if the contract pin is pending. It also stops when the served
 `/v1/openapi.json` differs from the pin, when no credentials are found, or when the account has no CDK bootstrap in
 `us-east-2`; then it prints the one-time command `pnpm --filter @roofing-crm/api exec cdk bootstrap aws://<account>/us-east-2`.
 CDK asks before IAM changes (`--require-approval broadening`). The script writes `cdk-outputs.json` (git-ignored) and

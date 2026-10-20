@@ -288,6 +288,26 @@ describe('network failures and cancellation', () => {
     expect(delays).toEqual([1000, 2000, 4000]);
   });
 
+  it('retries a slow failure without a readable response once, like a 5xx', async () => {
+    let clock = 0;
+    const delays: number[] = [];
+    const pipelineFetch = createPipelineFetch({
+      timeoutMs: 29_000,
+      fetch: () => Promise.reject(new TypeError('Failed to fetch')),
+      sleep: (ms) => {
+        delays.push(ms);
+        return Promise.resolve();
+      },
+      random: () => 0.5,
+      // Each reading is 6 s after the last: every attempt fails after more than FAST_FAILURE_MS.
+      now: () => (clock += 6000),
+    });
+    const error = await failure(pipelineFetch(`${base}/v1/properties/search`));
+    expect(error.kind).toBe('network');
+    expect(error.attempts).toBe(2);
+    expect(delays).toEqual([500]);
+  });
+
   it('does not send anything when the caller already aborted', async () => {
     routes.set('/never', (_req, res) => {
       reply(res, 200, {});

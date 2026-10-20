@@ -6,19 +6,22 @@ URL, inspected AWS and replied with the observation (item 27); agent-run checks 
 payloads are recorded here.
 
 Product and role: the Roofing CRM, built by `metagross` (`build-frontend-backends`, `apply-engineering-guidelines`,
-`guide-product-work`). Data source: the pipeline API v1, whose contract froze at `de08901`. The pipeline repository is at
-`6b698a4` (its T2 prepared, checked 2026-10-17). Its T7, which commits `openapi.json` and publishes `API_BASE`, is
-pending, so F1 is prepared but cannot be deployed yet.
+`guide-product-work`). Data source: the pipeline API v1, whose contract froze at `de08901`. The CRM pins the contract
+at pipeline commit `56b020c`. `API_BASE` is `https://733jzm4xv4.execute-api.us-east-2.amazonaws.com` (pipeline handoff,
+2026-10-20). On that account, cold searches time out until the pipeline's T7 correction (Parquet read from its deploy
+bucket) is live. F1 is therefore built and checked locally, and is deployed only once the operator relays "T7
+correction live" with the measured cold times.
 
 ## How F1 fits
 
 ```
 browser ──HTTPS──▶ CloudFront, stack RoofingCrm (us-east-2) ─┬─ default ─▶ S3: SPA, /config.json
                                                               └─ basemap/* ▶ S3: travis.pmtiles (Range), glyphs, sprites
-browser ──HTTPS──▶ pipeline API v1 (API_BASE): /v1/meta, /v1/properties/search      ◀── arrives with the pipeline's T7
+browser ──HTTPS──▶ pipeline API v1 (API_BASE), one call at a time:
+                   /v1/properties/search, then /v1/meta; /v1/search-centers from the place box
 ```
 
-Example, once T7 lands: the link `<WebUrl>/?lat=30.26720&lon=-97.74310&radius=5&age=15` makes the app call
+Example: the link `<WebUrl>/?lat=30.26720&lon=-97.74310&radius=5&age=15` makes the app call
 `GET {API_BASE}/v1/properties/search?lat=30.2672&lon=-97.7431&radius_miles=5&roof_age_min=15&open_permits=false&limit=500`.
 The answer `{items, total, next_cursor, area_note}` becomes up to 500 clustered markers, "N matches, showing 500", and
 one row per roof with its match reason and roof-age basis; the call's `x-request-id` is shown under the results.
@@ -27,7 +30,7 @@ one row per roof with its match reason and roof-age basis; the call's `x-request
 
 | Piece | ID | Usable increment | Depends on | Configuration / version | Status | Automated checks | Operator run / request id | AWS reference | Expected vs actual | Operator observation | Correction / cleanup | Next step |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| 1/5 | F1 | Find aged roofs on the map: hosted URL, Travis County and Austin by default, default search on load, pin and GPS, radius, age threshold, clustered markers, list with total and match reasons, freshness footer, disabled sections (README AC 1-4, 7, 11). Plus CI (item 21). | Pipeline T7: the pinned `openapi.json` and `API_BASE` | Working tree on `assignment` over `59d0635`, not committed. Pin pending. Basemap built locally (Protomaps 20261016, sha256 `9e5238…48c8`), not deployed. | prepared (blocked on pipeline T7) | 2026-10-17, uncached `pnpm check`: Prettier, ESLint, typecheck, 110 tests (shared 24, pipeline-client 29, web 38, api 19), build, `cdk synth`, pin check "pending". Production bundle run locally under the deployed CSP in Chromium: map, basemap, pin, radius, threshold, GPS inside and outside the county, phone to desktop layouts; no console errors, no request off the page's origin. | — | — (stack `RoofingCrm` not deployed) | Expected after T7: see the handoff below. Actual: not run; without `API_BASE` the app says "Pipeline API not configured" instead of showing rows. | — | — | When T7 lands: the steps below, then the handoff. |
+| 1/5 | F1 | Find aged roofs on the map: hosted URL, Travis County and Austin by default, default search on load, pin and GPS, place box, radius, age threshold, clustered markers, list with total and match reasons, freshness footer, disabled sections (README AC 1-4, 7, 11). Plus CI (item 21). | Pipeline: contract pin and `API_BASE` (done); its T7 correction live (pending) | Working tree on `assignment` over `58ec92a`, not committed. Contract pinned at pipeline `56b020c` (sha256 `7d8ece68…`, equal to the served file). `API_BASE` in `.env`. Basemap built locally (Protomaps 20261016, sha256 `9e5238…48c8`), not deployed. | prepared (live check waits for the pipeline's "T7 correction live") | 2026-10-20, `pnpm check` exit 0: Prettier, ESLint, typecheck, 153 tests (shared 24, pipeline-client 41, web 69, api 19), build, `cdk synth`, pin in sync; `check:served` matches the pin. Production bundle under the deployed CSP in Chrome against a local fake pipeline (synthetic rows, scratchpad only): default search, 500 clustered markers, "12,431 matches, showing 500", rows, load more to 1,000, place box choices, footer CIDs, loading and 429-retry states, phone layout; no page errors, no request off the page's origin. | — | — (stack `RoofingCrm` not deployed) | Expected after the T7 correction: see the handoff below; the default search about 7 to 8 s cold, faster warm. Actual: not run against the live API (the handoff says not to until the correction is live). | 2026-10-17, local preview (no AWS): `pnpm check` passes on the operator's machine; map, pin, radius and threshold work. GPS works in Firefox: a fix outside Travis County keeps the center and says so. Chrome on macOS returns `POSITION_UNAVAILABLE` on every site, browserleaks.com/geo included, so that is the browser's location access, not the app, which falls back to "Drop a pin on the map instead". | — | Operator: set the CI variable (runbook); on "T7 correction live", deploy and run the handoff below. |
 | 2/5 | F2 | Permit signal and detail: open and stalled toggle (on by default), long-open ordering, detail drawer with status, open duration, contractor attribution, BBB status, owner public fields, sources and CIDs (AC 5-6) | F1 verified | — | pending | — | — | — | — | — | — | Starts only after F1 is verified. |
 | 3/5 | F3 | Save leads: tRPC API, DynamoDB, create one or many, leads page, persistence across reloads (AC 8, creating) | F1 verified (F2 for permit leads) | — | pending | — | — | — | — | — | — | — |
 | 4/5 | F4 | Manage leads: status and note editing, delete, filters by status, roof age, permit group, open years and radius (AC 8, managing) | F3 verified | — | pending | — | — | — | — | — | — | — |
@@ -35,40 +38,52 @@ one row per roof with its match reason and roof-age basis; the call's `x-request
 
 ## F1: what is done and what remains
 
-Done (no dependency on the contract file): the workspace and CI; `packages/shared` (defaults, geo math, formatters,
+Done before the contract existed (2026-10-17): the workspace and CI; `packages/shared` (defaults, geo math, formatters,
 disabled sections, hosting helpers, basemap constants); `packages/pipeline-client` transport, error model and the
 pin/generate/check tooling; the map shell in `apps/web`; the `RoofingCrm` stack in `apps/api/cdk`; `pnpm basemap`;
 `pnpm deploy:aws`; the runbook.
 
-Remaining once T7 lands, in order:
+Done on 2026-10-20 (docs/decisions.md, 2026-10-20 entry):
 
-1. Pin the contract: `pnpm --filter @roofing-crm/pipeline-client pin <T7 commit> <path of openapi.json>`, then commit the
-   pin, `openapi/openapi.json` and `src/generated/pipeline-api.ts` together.
-2. Typed operations in `packages/pipeline-client` (openapi-fetch over `createPipelineFetch`): `getMeta` and
-   `searchProperties` with paging; tests against the generated types, plus a type-level check that the generated error
-   schema still carries `error` and `request_id`.
-3. Web: the default search on load (`open_permits=false`, `limit=500`, debounced on radius and threshold); markers from
-   the first page; the list with "N matches, showing M", rows (match reasons, roof-age basis, confidence, anchor, as-of
-   date and caveats, coordinates, source) and "load more" through `next_cursor`, restarting on `stale_cursor`; the
-   `area_note` notice, which also covers GPS fixes inside the map's box but outside the county; the error state with the
-   request id; a "pipeline busy, retrying" state from the transport's retries; the footer's run id, group CIDs, manifest
-   CID and `atlas`.
-4. Record `API_BASE` in `docs/runbook.md`, the operator's `.env` and the CI repository variable `PIPELINE_API_BASE`.
-5. Run `pnpm check`. The operator deploys, then the handoff below.
+1. Pin: `packages/contract/openapi.json` at `56b020c`, its snapshot and the generated types.
+2. Typed operations: `getMeta`, `searchProperties` (with `cursor`) and `searchCenters` over openapi-fetch. The browser
+   transport waits 29 s per attempt and retries a slow failure without a response once. A queue keeps one pipeline call
+   in flight per page.
+3. Web:
+   - the default search on load, debounced on later changes;
+   - markers from the first page;
+   - "N matches, showing M" and rows with the match reasons, the roof-age basis, confidence, anchor, as-of date and
+     caveats, coordinates and source;
+   - "load more", which restarts on `stale_cursor`;
+   - the `area_note` notice, including the GPS fallback;
+   - the loading state with elapsed seconds, the "pipeline busy, retrying" notice and the error state with the request
+     id;
+   - the footer's run id, manifest CID, group CIDs and Atlas;
+   - the place box;
+   - marker and row selection.
+4. `API_BASE` is recorded in `docs/runbook.md` and the operator's `.env`.
+5. `pnpm check` passes.
 
-Open question for the operator: the place box (§7, 2026-10-17 entry) is in none of item 26's pieces. Proposal: add it to
-F1's post-T7 work. It is not built until a dated decisions entry places it.
+Remaining:
 
-## F1 handoff (applies once T7 lands)
+- Operator: set the CI repository variable `PIPELINE_API_BASE` (the command is in the runbook).
+- Operator: push the pipeline's `assignment` branch, so the pinned commit `56b020c` is on GitHub.
+- When the pipeline tab relays "T7 correction live" with its measured cold times, the operator deploys and runs the
+  handoff below.
+
+## F1 handoff (applies once the pipeline's T7 correction is live)
 
 **Piece 1/5 — F1 find aged roofs on the map**
 
 - **Run:** `pnpm deploy:aws`, with `PIPELINE_API_BASE` in `.env` and your deploy profile in `AWS_PROFILE`. Open the
   "F1 link" it prints (`<WebUrl>/?lat=30.26720&lon=-97.74310&radius=5&age=15`). Then drop a pin north of the river, set
-  the radius to 2 and the threshold to 30, and press "Use my location".
-- **Expect:** the map opens on Austin with a 5-mile circle and the default search already run: clustered markers, "N
-  matches, showing 500" with N equal to the API's `total`, rows with "aged roof", the roof-age basis and as-of date,
-  coordinates and source, and the footer with the run id, group CIDs and manifest CID. The pin, the radius and the
+  the radius to 2 and the threshold to 30, type `Pflugerville` in "City or ZIP" and press Go, and press "Use my
+  location".
+- **Expect:** the map opens on Austin with a 5-mile circle and the default search under way ("Searching the pipeline…"
+  with a seconds counter; about 7 to 8 s on a cold pipeline). Then: clustered markers; "N matches, showing 500" with N
+  equal to the API's `total`; rows with "Aged roof", the roof-age basis and as-of date, coordinates and source; and the
+  footer with the run id, manifest CID, the group CIDs list and "Atlas: not published yet". The place box moves the
+  center to Pflugerville and shows its match type. The pin, the radius and the
   threshold change the circle, the URL, the markers and the count. A location outside Travis County keeps the center and
   says so. Outreach, Campaigns, Sequences, Reporting and Billing show disabled, marked "Soon".
 - **AWS (us-east-2, the account `pnpm deploy:aws` printed):**

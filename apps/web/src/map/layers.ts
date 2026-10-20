@@ -1,3 +1,4 @@
+import type { PropertySummary } from '@roofing-crm/pipeline-client';
 import { circleRing, type GeoPoint } from '@roofing-crm/shared';
 import type { Feature, FeatureCollection, Point, Polygon } from 'geojson';
 import type { GeoJSONSourceSpecification, LayerSpecification } from 'maplibre-gl';
@@ -7,6 +8,8 @@ export const RESULTS_SOURCE = 'results';
 export const RESULTS_CLUSTER_LAYER = 'results-clusters';
 export const RESULTS_CLUSTER_COUNT_LAYER = 'results-cluster-count';
 export const RESULTS_POINT_LAYER = 'results-points';
+export const SELECTED_SOURCE = 'selected';
+export const SELECTED_LAYER = 'selected-point';
 
 export const MAP_COLORS = {
   accent: '#0f766e',
@@ -23,6 +26,29 @@ export type ResultFeature = Feature<Point, { id: string }>;
 export type ResultCollection = FeatureCollection<Point, { id: string }>;
 
 export const NO_RESULTS: ResultCollection = { type: 'FeatureCollection', features: [] };
+
+/** Markers for the rows that have coordinates; the id links each marker to its list row. */
+export function resultFeatures(items: readonly PropertySummary[]): ResultCollection {
+  const features: ResultFeature[] = [];
+  for (const item of items) {
+    if (item.lat === null || item.lon === null) continue;
+    features.push({
+      type: 'Feature',
+      properties: { id: item.property_id },
+      geometry: { type: 'Point', coordinates: [item.lon, item.lat] },
+    });
+  }
+  return { type: 'FeatureCollection', features };
+}
+
+/** The selected row's marker, drawn above the clusters so it shows even inside one. */
+export function selectedFeature(
+  results: ResultCollection,
+  selectedId: string | null,
+): ResultCollection {
+  const feature = results.features.find((candidate) => candidate.properties.id === selectedId);
+  return { type: 'FeatureCollection', features: feature ? [feature] : [] };
+}
 
 export function searchAreaData(center: GeoPoint, radiusMiles: number): Feature<Polygon> {
   return {
@@ -106,3 +132,15 @@ export const resultsLayers: LayerSpecification[] = [
     },
   },
 ];
+
+export const selectedLayer: LayerSpecification = {
+  id: SELECTED_LAYER,
+  type: 'circle',
+  source: SELECTED_SOURCE,
+  paint: {
+    'circle-color': MAP_COLORS.aged,
+    'circle-radius': 9,
+    'circle-stroke-color': MAP_COLORS.accent,
+    'circle-stroke-width': 3,
+  },
+};
