@@ -1294,6 +1294,150 @@ a.button {
   text-decoration: none;
 }
 
+/* Assistant (F5) */
+
+.assistant-page {
+  display: grid;
+  gap: 14px;
+  max-width: 880px;
+  padding: 20px 24px 32px;
+}
+
+.assistant-examples {
+  display: grid;
+  gap: 8px;
+}
+
+.assistant-example {
+  text-align: left;
+  font-weight: 500;
+  white-space: normal;
+}
+
+.assistant-transcript {
+  display: grid;
+  gap: 14px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.assistant-exchange {
+  display: grid;
+  gap: 8px;
+}
+
+.assistant-question {
+  justify-self: end;
+  max-width: 85%;
+  padding: 8px 12px;
+  border-radius: var(--radius);
+  background: var(--color-accent-weak);
+  color: var(--color-accent-strong);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.assistant-response {
+  display: grid;
+  gap: 8px;
+  padding: 12px 14px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  background: var(--color-surface);
+  overflow-wrap: anywhere;
+}
+
+.assistant-outcome {
+  font-size: 12.5px;
+  font-weight: 650;
+  color: var(--color-accent-strong);
+}
+
+.assistant-outcome--tool_error,
+.assistant-outcome--limit_reached {
+  color: #b42318;
+}
+
+.assistant-answer {
+  display: grid;
+  gap: 6px;
+}
+
+.assistant-answer ul,
+.assistant-section ul,
+.assistant-section ol {
+  margin: 0;
+  padding-left: 20px;
+}
+
+.assistant-chip {
+  display: inline-block;
+  margin: 0 2px;
+  padding: 0 7px;
+  border: 1px solid var(--color-permit);
+  border-radius: 999px;
+  background: var(--color-surface);
+  color: var(--color-permit-cluster);
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.assistant-chip:hover {
+  background: var(--color-surface-muted);
+}
+
+.assistant-chip:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 1px;
+}
+
+.assistant-chip--property {
+  border-color: var(--color-aged);
+  color: var(--color-aged-cluster);
+}
+
+.assistant-chip--static {
+  border-color: var(--color-border);
+  color: var(--color-text);
+  cursor: default;
+}
+
+.assistant-section {
+  font-size: 13px;
+}
+
+.assistant-section summary {
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.assistant-evidence {
+  display: grid;
+  gap: 3px;
+  margin-top: 4px;
+}
+
+.assistant-evidence-kind {
+  font-weight: 600;
+}
+
+.assistant-args {
+  font-size: 11.5px;
+  overflow-wrap: anywhere;
+}
+
+.assistant-composer {
+  display: grid;
+  gap: 6px;
+  position: sticky;
+  bottom: 0;
+  padding: 10px 0;
+  background: var(--color-bg);
+}
+
 /* Footer */
 
 .app-footer {
@@ -1414,7 +1558,8 @@ a.button {
     font-size: 11.5px;
   }
 
-  .leads-page {
+  .leads-page,
+  .assistant-page {
     padding: 16px 12px 24px;
   }
 

@@ -86,3 +86,25 @@ export type {
   UpdateLeadResult,
 } from './leads';
 export { ULID_PATTERN, ulid, ulidTime } from './ulid';
+export {
+  AGENT_NAME,
+  AGENT_UNAVAILABLE_REASONS,
+  CHAT_LIMITS,
+  CHAT_OUTCOMES,
+  CITATION_TOKEN,
+  ChatInputSchema,
+  ChatMessageSchema,
+} from './chat';
+export type {
+  AgentUnavailableReason,
+  ChatCenter,
+  ChatEvidence,
+  ChatEvidenceKind,
+  ChatInput,
+  ChatLeadCreated,
+  ChatLimitation,
+  ChatMessage,
+  ChatOutcome,
+  ChatResponse,
+  ChatToolCall,
+} from './chat';

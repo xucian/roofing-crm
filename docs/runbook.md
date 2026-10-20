@@ -134,4 +134,28 @@ Traces are live CRM chats (questions typed on the public URL), grouped by `sessi
 
 Optional kit defaults, used at F5 if omitted: `LANGSMITH_TRACING=true`, `LANGSMITH_ENDPOINT=https://api.smith.langchain.com`.
 
-**Deploy (F5, not yet).** The deploy script writes `LANGSMITH_API_KEY` from `.env` to Secrets Manager with the AWS CLI, outside CloudFormation; CDK only references that secret and sets the agent Lambda to `LANGSMITH_PROJECT=pidgeot-agent` plus `LANGSMITH_API_KEY_SECRET_ARN`. Passing the key through CDK would print it in the synthesized template, so it never goes there, nor in git, logs or the frontend bundle. If the secret is missing at runtime, tracing degrades; chat still answers.
+**Deploy (F5).** `pnpm deploy:aws` reads only `LANGSMITH_API_KEY` from `.env` and writes it to the Secrets Manager
+secret `pidgeot-agent/langsmith-api-key` with the AWS CLI, through a file only this user can read: never on a command
+line, in the template, in git, in logs or in the frontend bundle. It writes a new version only when the key changed. CDK
+grants the `agent` function `GetSecretValue` on that secret and sets `LANGSMITH_PROJECT=pidgeot-agent` and
+`LANGSMITH_API_KEY_SECRET_ID` (its name). Without a key in `.env` the stack sets `LANGSMITH_TRACING=false`; an unreadable
+secret also leaves the agent untraced. Chat answers either way.
+
+## Agent
+
+- **Model.** `us.anthropic.claude-sonnet-4-6` (US cross-region profile; the account denies newer Claude models). Another
+  enabled profile: `-c bedrockModelId=<profile id>` on the deploy's `cdk deploy` (scripts/deploy.ts).
+- **Daily budget.** 200 turns and 2,000,000 tokens per UTC day, then 503 `budget_exhausted` until 00:00 UTC. The count is
+  the leads table item with `workspace_id` `#agent-usage` and `lead_key` the UTC date; deleting that item resets the day.
+  The function's environment `AGENT_DAILY_TURNS` and `AGENT_DAILY_TOKENS` override the caps.
+- **Golden set.** `fixtures/agent/golden.json`, 10 cases (questions and expected tool calls, never prose). In-process, with
+  the live pipeline and Bedrock (about $0.20 a run): the Bedrock provider reads the standard credential variables, so
+  export the profile's first:
+
+  ```sh
+  eval "$(aws configure export-credentials --profile cdk-lab --format env)"
+  AWS_REGION=us-east-2 POWERTOOLS_LOG_LEVEL=ERROR pnpm agent:golden
+  ```
+
+  Against the deployed agent: `pnpm agent:golden --url <WebUrl>`. Each run uses a fresh workspace and saves 2 leads in it;
+  results go to `fixtures/agent/results/` (git-ignored).

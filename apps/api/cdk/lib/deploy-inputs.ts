@@ -7,6 +7,9 @@ import { BASEMAP_FONT_STACKS, BASEMAP_PATHS, normalizePipelineApiBase } from '@r
  * - `pipelineApiBase`: the pipeline API v1 base, the single environment input (metagross item 2);
  * - `basemapDir`: the output of `pnpm basemap`;
  * - `webDistDir`: the built web app (defaults to ../web/dist);
+ * - `langsmithSecretName`: the Secrets Manager secret with the LangSmith key, which the deploy script
+ *   writes from .env outside the template (F5); without it the agent runs untraced;
+ * - `bedrockModelId`: the agent's inference profile, Sonnet 4.6 when unset;
  * - `requireDeployInputs=true`: set by the deploy script so a deploy cannot go out without the first two.
  * CI synthesizes without them; the stack then writes `pipelineApiBase: null` and skips the basemap.
  */
@@ -14,6 +17,8 @@ export interface DeployInputs {
   pipelineApiBase: string | null;
   webDistDir: string;
   basemapDir: string | null;
+  langsmithSecretName: string | null;
+  bedrockModelId: string | null;
 }
 
 export interface ContextReader {
@@ -67,5 +72,10 @@ export function readDeployInputs(context: ContextReader, cwd: string): DeployInp
       'basemapDir is required for a deploy: run pnpm basemap first (docs/runbook.md).',
     );
   }
-  return { pipelineApiBase, webDistDir, basemapDir };
+  const langsmithSecretName = text(context.tryGetContext('langsmithSecretName'));
+  if (langsmithSecretName !== null && !/^[A-Za-z0-9/_+=.@-]{1,512}$/.test(langsmithSecretName)) {
+    throw new Error(`langsmithSecretName is not a Secrets Manager name: ${langsmithSecretName}`);
+  }
+  const bedrockModelId = text(context.tryGetContext('bedrockModelId'));
+  return { pipelineApiBase, webDistDir, basemapDir, langsmithSecretName, bedrockModelId };
 }

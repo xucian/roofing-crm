@@ -17,3 +17,6 @@ cdk-outputs.json
 # Basemap extract, fonts and sprites (made by `pnpm basemap`, uploaded by the deploy; never committed)
 basemap/
 
+
+# Agent golden-set runs (pnpm agent:golden): answers to live questions, not committed
+fixtures/agent/results/

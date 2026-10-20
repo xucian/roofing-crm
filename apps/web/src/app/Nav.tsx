@@ -11,11 +11,12 @@ export interface NavProps {
 const LIVE: readonly { route: Route; label: string }[] = [
   { route: 'map', label: 'Map' },
   { route: 'leads', label: 'Leads' },
+  { route: 'assistant', label: 'Assistant' },
 ];
 
 /**
- * Sections: the map and the leads are live; the sections beyond lead identification are shown
- * disabled (README AC 11).
+ * Sections: the map, the leads and the assistant are live; the sections beyond lead identification
+ * are shown disabled (README AC 11).
  */
 export function Nav({ route, onNavigate, leadCount }: NavProps) {
   return (

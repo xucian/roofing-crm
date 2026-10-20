@@ -133,6 +133,31 @@ describe('createPipelineClient', () => {
     });
   });
 
+  it('searches permit text with its list parameter comma-separated (F5)', async () => {
+    answer = { status: 200, body: EMPTY_SEARCH };
+    const result = await client().searchPermitText({
+      q: 'hail damage',
+      status_group: ['open', 'stalled'],
+      roofing_only: true,
+      limit: 20,
+    });
+    expect(seen[0]?.path).toBe('/v1/permits/text-search');
+    expect(Object.fromEntries(seen[0]?.query ?? [])).toEqual({
+      q: 'hail damage',
+      status_group: 'open,stalled',
+      roofing_only: 'true',
+      limit: '20',
+    });
+    expect(result.requestId).toBe('req-fixture-1');
+  });
+
+  it('reads one contractor attribution by its key (F5)', async () => {
+    answer = { status: 200, body: { contractor_attribution_key: 'f'.repeat(32) } };
+    const result = await client().getContractor('f'.repeat(32));
+    expect(seen[0]?.path).toBe(`/v1/contractors/${'f'.repeat(32)}`);
+    expect(result.data.contractor_attribution_key).toBe('f'.repeat(32));
+  });
+
   it('reads /v1/meta', async () => {
     answer = { status: 200, body: { county: 'fixture' } };
     const result = await client().getMeta();

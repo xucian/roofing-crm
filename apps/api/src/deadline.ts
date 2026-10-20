@@ -36,3 +36,23 @@ export function startDeadline(
     signal: AbortSignal.timeout(Math.max(0, budget)),
   };
 }
+
+/**
+ * A chat turn's budget counts from API Gateway's receipt (`requestContext.timeEpoch`), so a cold start
+ * is inside it: 25 s from receipt, or less when the Lambda has less time left.
+ */
+export function deadlineFrom(
+  receivedAt: number,
+  lambdaRemainingMs: number | undefined,
+  now: () => number = Date.now,
+): Deadline {
+  const fromReceipt = receivedAt + HANDLER_DEADLINE_MS - now();
+  const fromLambda =
+    lambdaRemainingMs === undefined ? fromReceipt : lambdaRemainingMs - DEADLINE_RESERVE_MS;
+  const budget = Math.max(0, Math.min(fromReceipt, fromLambda));
+  const endsAt = now() + budget;
+  return {
+    remainingMs: () => Math.max(0, endsAt - now()),
+    signal: AbortSignal.timeout(budget),
+  };
+}

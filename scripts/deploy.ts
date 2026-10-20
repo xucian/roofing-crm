@@ -3,15 +3,22 @@
 //   pnpm deploy:aws [--yes]
 //
 // The pipeline API base is `apiBase` in packages/pipeline-client/openapi.pin.json (committed, not a
-// secret); PIPELINE_API_BASE in the environment overrides it. Nothing is read from .env. Steps: refuse
-// without the pinned pipeline contract -> check that the API serves that contract -> show the AWS
-// identity and region -> check the CDK bootstrap -> check the basemap -> build -> cdk deploy ->
-// subscribe an email to the alarm topic once -> print the URL, the F1 link and the API's resources.
+// secret); PIPELINE_API_BASE in the environment overrides it. From .env only LANGSMITH_API_KEY is
+// read. Steps: refuse without the pinned pipeline contract -> check that the API serves that contract
+// -> show the AWS identity and region -> check the CDK bootstrap -> check the basemap -> write the
+// LangSmith key to Secrets Manager -> build -> cdk deploy -> subscribe an email to the alarm topic
+// once -> print the URL, the F1 link and the API's resources.
+//
+// The LangSmith key (F5) goes from .env to the secret `pidgeot-agent/langsmith-api-key` with the AWS
+// CLI, through a file only this user can read, so it is in neither argv, the template, git nor the
+// logs; CDK gets the secret's name and the agent reads the key at run time. Without a key the agent
+// answers untraced.
 //
 // The alarm email is the operator's, so it stays out of git and out of the template: ALERT_EMAIL, or
 // a prompt the first time, subscribes it with the AWS CLI. Later deploys find the subscription and
 // leave it alone.
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { parseArgs } from 'node:util';
@@ -29,6 +36,8 @@ const API_DIR = join(REPO_ROOT, 'apps/api');
 const BASEMAP_DIR = join(REPO_ROOT, 'basemap');
 const OUTPUTS_FILE = join(REPO_ROOT, 'cdk-outputs.json');
 const PIN_FILE = join(REPO_ROOT, 'packages/pipeline-client/openapi.pin.json');
+const ENV_FILE = join(REPO_ROOT, '.env');
+export const LANGSMITH_SECRET_NAME = 'pidgeot-agent/langsmith-api-key';
 
 interface PinFile {
   apiBase?: string;
@@ -139,6 +148,96 @@ async function ensureAlertEmail(topicArn: string, interactive: boolean): Promise
   console.log('AWS has sent a confirmation email: open it and click "Confirm subscription".');
 }
 
+/** LANGSMITH_API_KEY from the environment or .env; nothing else is read from .env. */
+function langsmithKey(): string | null {
+  const fromEnv = process.env.LANGSMITH_API_KEY?.trim();
+  if (fromEnv) return fromEnv;
+  if (!existsSync(ENV_FILE)) return null;
+  const line = readFileSync(ENV_FILE, 'utf8')
+    .split('\n')
+    .find((entry) => entry.startsWith('LANGSMITH_API_KEY='));
+  const value = line
+    ?.slice('LANGSMITH_API_KEY='.length)
+    .trim()
+    .replace(/^["']|["']$/g, '');
+  return value === undefined || value === '' ? null : value;
+}
+
+/**
+ * Creates or updates the LangSmith key's secret (a new version only when the key changed); returns
+ * the secret's name for CDK, or null when there is no key.
+ */
+function ensureLangsmithSecret(): string | null {
+  const key = langsmithKey();
+  if (key === null) {
+    console.log('No LANGSMITH_API_KEY in .env: the agent will answer without LangSmith traces.');
+    return null;
+  }
+  const dir = mkdtempSync(join(tmpdir(), 'roofing-crm-'));
+  const file = join(dir, 'secret');
+  try {
+    writeFileSync(file, key, { mode: 0o600 });
+    const current = capture('aws', [
+      'secretsmanager',
+      'get-secret-value',
+      '--secret-id',
+      LANGSMITH_SECRET_NAME,
+      '--region',
+      REGION,
+      '--query',
+      'SecretString',
+      '--output',
+      'text',
+    ]);
+    if (current === key) {
+      console.log(`LangSmith key: ${LANGSMITH_SECRET_NAME} is up to date.`);
+    } else if (current === null) {
+      run(
+        'aws',
+        [
+          'secretsmanager',
+          'create-secret',
+          '--name',
+          LANGSMITH_SECRET_NAME,
+          '--description',
+          'LangSmith API key of the Roofing CRM agent (pidgeot-agent); written by pnpm deploy:aws',
+          '--secret-string',
+          `file://${file}`,
+          '--tags',
+          'Key=project_name,Value=roofing-crm',
+          '--region',
+          REGION,
+          '--query',
+          'Name',
+          '--output',
+          'text',
+        ],
+        { stdio: ['ignore', 'ignore', 'inherit'] },
+      );
+      console.log(`LangSmith key: created ${LANGSMITH_SECRET_NAME}.`);
+    } else {
+      run(
+        'aws',
+        [
+          'secretsmanager',
+          'put-secret-value',
+          '--secret-id',
+          LANGSMITH_SECRET_NAME,
+          '--secret-string',
+          `file://${file}`,
+          '--region',
+          REGION,
+        ],
+        { stdio: ['ignore', 'ignore', 'inherit'] },
+      );
+      console.log(`LangSmith key: updated ${LANGSMITH_SECRET_NAME}.`);
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+  return LANGSMITH_SECRET_NAME;
+}
+
 async function main(): Promise<void> {
   const { values } = parseArgs({ options: { yes: { type: 'boolean', default: false } } });
 
@@ -187,6 +286,7 @@ async function main(): Promise<void> {
     fail('Cancelled.');
   }
 
+  const langsmithSecretName = ensureLangsmithSecret();
   const commit = buildCommit();
   pnpm(['install', '--frozen-lockfile'], { cwd: REPO_ROOT });
   pnpm(['turbo', 'run', 'build', '--filter=@roofing-crm/web'], {
@@ -209,6 +309,7 @@ async function main(): Promise<void> {
       `basemapDir=${BASEMAP_DIR}`,
       '-c',
       'requireDeployInputs=true',
+      ...(langsmithSecretName ? ['-c', `langsmithSecretName=${langsmithSecretName}`] : []),
     ],
     { cwd: API_DIR },
   );
@@ -232,6 +333,12 @@ async function main(): Promise<void> {
   console.log(`  Function logs:  ${outputs.LeadsLogGroup ?? '?'}`);
   console.log(`  Access logs:    ${outputs.ApiAccessLogGroup ?? '?'}`);
   console.log(`  Leads table:    ${outputs.LeadsTableName ?? '?'}`);
+  console.log(
+    `  Agent function: ${outputs.AgentFunctionName ?? '?'} (${outputs.BedrockModelId ?? '?'})`,
+  );
+  console.log(`  Agent logs:     ${outputs.AgentLogGroup ?? '?'}`);
+  console.log(`  Dashboard:      ${outputs.DashboardName ?? '?'}`);
+  console.log(`  Assistant:      ${webUrl}/assistant`);
   console.log("Next: the current piece's handoff in docs/progress.md.");
 }
 

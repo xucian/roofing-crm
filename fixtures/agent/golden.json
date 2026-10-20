@@ -1,0 +1,88 @@
+{
+  "description": "Golden questions for pidgeot-agent (alakazam review item 7). Expectations are tool calls, their parameters, outcomes and the miss and save rules, never prose. Run with `pnpm agent:golden` (in-process, live pipeline and Bedrock) or `pnpm agent:golden --url <WebUrl>` (the deployed agent). Cases run in order in one workspace: the lead cases rely on the save case before them.",
+  "map_center": { "lat": 30.2672, "lon": -97.7431 },
+  "cases": [
+    {
+      "id": "readme-open-permits",
+      "question": "Show me open roofing permits older than five years within five miles of Austin",
+      "outcomes": ["answered"],
+      "tools_in_order": ["resolve_search_center", "search_permits"],
+      "params": {
+        "search_permits": { "radius_miles": 5, "min_open_years": 5, "roofing_only": true }
+      },
+      "forbid_tools": ["search_properties"],
+      "min_evidence": { "permit": 1 }
+    },
+    {
+      "id": "aged-roofs-near-pin",
+      "question": "Which properties within 2 miles of the map's pin have roofs older than 30 years?",
+      "outcomes": ["answered"],
+      "tools_in_order": ["search_properties"],
+      "params": {
+        "search_properties": {
+          "roof_age_min": 30,
+          "radius_miles": 2,
+          "lat": 30.2672,
+          "lon": -97.7431
+        }
+      },
+      "center_kind": "map_pin",
+      "min_evidence": { "property": 1 }
+    },
+    {
+      "id": "permit-text",
+      "question": "Find permits whose description mentions hail damage near Pflugerville",
+      "outcomes": ["answered", "no_matches"],
+      "tools_in_order": ["resolve_search_center", "search_permit_text"]
+    },
+    {
+      "id": "owner-tenure-county-wide",
+      "question": "Anywhere in the county, which absentee owners have owned their property more than 20 years?",
+      "outcomes": ["answered", "no_matches"],
+      "tools_in_order": ["search_properties"],
+      "params": { "search_properties": { "absentee_owner": true, "owner_tenure_min": 20 } },
+      "absent_params": { "search_properties": ["lat", "lon"] }
+    },
+    {
+      "id": "out-of-county",
+      "question": "Show me open roofing permits in Dallas",
+      "outcomes": ["out_of_county", "no_matches"],
+      "max_evidence": { "permit": 0, "property": 0 }
+    },
+    {
+      "id": "off-topic",
+      "question": "What is the capital of France?",
+      "outcomes": ["out_of_scope"],
+      "max_tool_calls": 0
+    },
+    {
+      "id": "no-save-without-ask",
+      "question": "Find the two longest-open roofing permits within 3 miles of Austin",
+      "outcomes": ["answered"],
+      "forbid_tools": ["create_lead"],
+      "leads_created": 0
+    },
+    {
+      "id": "save-on-ask",
+      "question": "Find the two longest-open roofing permits within 3 miles of Austin and save both as leads",
+      "outcomes": ["answered"],
+      "tools_in_order": ["search_permits", "create_lead"],
+      "leads_created": 2
+    },
+    {
+      "id": "list-leads",
+      "question": "Which of my saved leads have a permit open more than 10 years?",
+      "outcomes": ["answered", "no_matches"],
+      "tools_in_order": ["list_leads"],
+      "params": { "list_leads": { "open_years_min": 10 } },
+      "forbid_tools": ["create_lead"]
+    },
+    {
+      "id": "contractor",
+      "question": "Who is the listed contractor on the longest-open roofing permit within 1 mile of Austin, and what is their BBB rating?",
+      "outcomes": ["answered", "no_matches"],
+      "tools_in_order": ["resolve_search_center", "search_permits"],
+      "answer_mentions": "BBB"
+    }
+  ]
+}

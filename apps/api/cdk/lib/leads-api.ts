@@ -6,12 +6,15 @@ import { HttpLambdaIntegration } from 'aws-cdk-lib/aws-apigatewayv2-integrations
 import * as cloudwatch from 'aws-cdk-lib/aws-cloudwatch';
 import { SnsAction } from 'aws-cdk-lib/aws-cloudwatch-actions';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
+import * as iam from 'aws-cdk-lib/aws-iam';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as nodejs from 'aws-cdk-lib/aws-lambda-nodejs';
 import * as logs from 'aws-cdk-lib/aws-logs';
 import * as sns from 'aws-cdk-lib/aws-sns';
 import { Construct } from 'constructs';
+import { AGENT_NAME } from '@roofing-crm/shared';
 import {
+  CHAT_FAILURE_REASONS,
   METRIC,
   METRICS_NAMESPACE,
   PIPELINE_OUTAGE_STATUSES,
@@ -20,12 +23,16 @@ import {
 
 const REPO_ROOT = fileURLToPath(new URL('../../../../', import.meta.url));
 const HANDLER_ENTRY = fileURLToPath(new URL('../../src/handler.ts', import.meta.url));
+const AGENT_ENTRY = fileURLToPath(new URL('../../src/agent-handler.ts', import.meta.url));
 
 /** The CRM API's base path; CloudFront sends `/api/*` here unchanged. Fixed once deployed. */
 export const API_BASE_PATH = '/api/trpc';
 
 /** The mutations, each on its own POST route so its throttle applies (httpLink, no batching). */
 export const MUTATIONS = ['create', 'createMany', 'update', 'delete'] as const;
+
+/** The agent's route (F5): its own function, throttle and reserved concurrency. */
+export const CHAT_ROUTE = `POST ${API_BASE_PATH}/agent.chat` as const;
 
 /**
  * Route throttles (metagross item 4), tighter than its example. `createMany` reads the pipeline once
@@ -39,10 +46,15 @@ export const THROTTLES = {
     [`POST ${API_BASE_PATH}/leads.createMany`]: { rateLimit: 0.5, burstLimit: 2 },
     [`POST ${API_BASE_PATH}/leads.update`]: { rateLimit: 2, burstLimit: 5 },
     [`POST ${API_BASE_PATH}/leads.delete`]: { rateLimit: 2, burstLimit: 5 },
+    // A turn takes 7 to 12 s and runs on 5 reserved executions: 0.5 a second, bursts of 3.
+    [CHAT_ROUTE]: { rateLimit: 0.5, burstLimit: 3 },
   },
 } satisfies {
   stage: { rateLimit: number; burstLimit: number };
-  routes: Record<`POST ${typeof API_BASE_PATH}/leads.${(typeof MUTATIONS)[number]}`, object>;
+  routes: Record<
+    `POST ${typeof API_BASE_PATH}/leads.${(typeof MUTATIONS)[number]}` | typeof CHAT_ROUTE,
+    object
+  >;
 };
 
 /**
@@ -53,23 +65,41 @@ export const THROTTLES = {
  */
 export const LEADS_RESERVED_CONCURRENCY = 10;
 
+/** The `agent` function's reserved concurrency: at most 5 turns at once, whatever the traffic. */
+export const AGENT_RESERVED_CONCURRENCY = 5;
+
+/** The agent's model (docs/decisions.md, F5 entry): Claude Sonnet 4.6 by its US inference profile. */
+export const DEFAULT_BEDROCK_MODEL_ID = 'us.anthropic.claude-sonnet-4-6';
+/** Regions the US cross-region profile routes to: their foundation-model ARNs are granted. */
+export const BEDROCK_ROUTING_REGIONS = ['us-east-1', 'us-east-2', 'us-west-2'] as const;
+
+/** Chat tokens in a UTC day that raise the usage alarm: three quarters of the daily cap. */
+export const DAILY_TOKEN_ALARM = 1_500_000;
+
 /** Lambda timeout: above the 25 s handler deadline, under API Gateway's 30 s integration cap. */
 export const FUNCTION_TIMEOUT = Duration.seconds(29);
 
 export interface LeadsApiProps {
   /** The pipeline API v1 base the function reads snapshots from; null in a synth without inputs. */
   pipelineApiBase: string | null;
+  /** BEDROCK_MODEL_ID: an inference profile enabled in the account. */
+  bedrockModelId?: string;
+  /** The Secrets Manager secret holding the LangSmith key (made by the deploy script); null: no tracing. */
+  langsmithSecretName: string | null;
 }
 
 /**
- * The CRM API (F3, F4): one `leads` NodejsFunction serving tRPC, a DynamoDB table of leads, an HTTP API
- * whose routes CloudFront reaches under `/api/*`, and the alarms that watch them (metagross items 3,
- * 4, 9, 15, 16, 18, 22). The agent function joins in F5.
+ * The CRM API (F3 to F5): the `leads` and `agent` NodejsFunctions serving one tRPC router, a DynamoDB
+ * table of leads, an HTTP API whose routes CloudFront reaches under `/api/*`, and the alarms that
+ * watch them (metagross items 3, 4, 9, 15, 16, 18, 22; the metagross entry's two functions).
  */
 export class LeadsApi extends Construct {
   readonly table: dynamodb.Table;
   readonly function: nodejs.NodejsFunction;
   readonly functionLogs: logs.LogGroup;
+  readonly agentFunction: nodejs.NodejsFunction;
+  readonly agentLogs: logs.LogGroup;
+  readonly bedrockModelId: string;
   readonly accessLogs: logs.LogGroup;
   readonly httpApi: apigwv2.HttpApi;
   readonly alerts: sns.Topic;
@@ -135,6 +165,82 @@ export class LeadsApi extends Construct {
       'dynamodb:DeleteItem',
     );
 
+    // The agent (F5): its own function, so a burst of chat turns cannot starve lead writes and the AI
+    // SDK stays out of the leads cold start (metagross entry). It reads the pipeline for its tools and
+    // writes leads only through create_lead and its daily usage item.
+    this.bedrockModelId = props.bedrockModelId ?? DEFAULT_BEDROCK_MODEL_ID;
+    this.agentLogs = new logs.LogGroup(this, 'AgentLogs', {
+      retention: logs.RetentionDays.THREE_MONTHS,
+      removalPolicy: RemovalPolicy.DESTROY,
+    });
+    this.agentFunction = new nodejs.NodejsFunction(this, 'AgentFunction', {
+      description: `Roofing CRM agent: ${AGENT_NAME} on Bedrock (tRPC agent.chat)`,
+      entry: AGENT_ENTRY,
+      handler: 'handler',
+      projectRoot: REPO_ROOT,
+      depsLockFilePath: `${REPO_ROOT}pnpm-lock.yaml`,
+      runtime: lambda.Runtime.NODEJS_22_X,
+      architecture: lambda.Architecture.ARM_64,
+      memorySize: 1024,
+      timeout: FUNCTION_TIMEOUT,
+      tracing: lambda.Tracing.ACTIVE,
+      logGroup: this.agentLogs,
+      reservedConcurrentExecutions: AGENT_RESERVED_CONCURRENCY,
+      environment: {
+        LEADS_TABLE: this.table.tableName,
+        ...(props.pipelineApiBase === null ? {} : { PIPELINE_API_BASE: props.pipelineApiBase }),
+        BEDROCK_MODEL_ID: this.bedrockModelId,
+        LANGSMITH_PROJECT: AGENT_NAME,
+        LANGSMITH_TRACING: props.langsmithSecretName === null ? 'false' : 'true',
+        ...(props.langsmithSecretName === null
+          ? {}
+          : { LANGSMITH_API_KEY_SECRET_ID: props.langsmithSecretName }),
+        POWERTOOLS_SERVICE_NAME: SERVICE_NAME,
+        POWERTOOLS_METRICS_NAMESPACE: METRICS_NAMESPACE,
+        POWERTOOLS_LOG_LEVEL: 'INFO',
+        NODE_OPTIONS: '--enable-source-maps',
+      },
+      bundling: {
+        minify: true,
+        sourceMap: true,
+        target: 'node22',
+        externalModules: [],
+      },
+    });
+    this.table.grant(
+      this.agentFunction,
+      'dynamodb:GetItem',
+      'dynamodb:PutItem',
+      'dynamodb:Query',
+      'dynamodb:UpdateItem',
+    );
+    const stack = Stack.of(this);
+    const foundationModel = this.bedrockModelId.replace(/^(us|eu|apac|global)\./, '');
+    this.agentFunction.addToRolePolicy(
+      new iam.PolicyStatement({
+        sid: 'BedrockInvokeProfileAndFoundationModels',
+        actions: ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream'],
+        resources: [
+          `arn:${stack.partition}:bedrock:${stack.region}:${stack.account}:inference-profile/${this.bedrockModelId}`,
+          ...BEDROCK_ROUTING_REGIONS.map(
+            (region) =>
+              `arn:${stack.partition}:bedrock:${region}::foundation-model/${foundationModel}`,
+          ),
+        ],
+      }),
+    );
+    if (props.langsmithSecretName !== null) {
+      this.agentFunction.addToRolePolicy(
+        new iam.PolicyStatement({
+          sid: 'ReadLangSmithKey',
+          actions: ['secretsmanager:GetSecretValue'],
+          resources: [
+            `arn:${stack.partition}:secretsmanager:${stack.region}:${stack.account}:secret:${props.langsmithSecretName}-??????`,
+          ],
+        }),
+      );
+    }
+
     this.httpApi = new apigwv2.HttpApi(this, 'HttpApi', {
       apiName: `${Stack.of(this).stackName}-api`,
       description: 'Roofing CRM API (tRPC under /api/trpc), reached through CloudFront',
@@ -180,6 +286,11 @@ export class LeadsApi extends Construct {
           integration,
         }),
       ),
+      ...this.httpApi.addRoutes({
+        path: `${API_BASE_PATH}/agent.chat`,
+        methods: [apigwv2.HttpMethod.POST],
+        integration: new HttpLambdaIntegration('Agent', this.agentFunction),
+      }),
       ...this.httpApi.addRoutes({
         path: `${API_BASE_PATH}/{proxy+}`,
         methods: [apigwv2.HttpMethod.GET],
@@ -236,6 +347,18 @@ export class LeadsApi extends Construct {
       `The leads function was throttled: it reached its reserved concurrency of ${String(LEADS_RESERVED_CONCURRENCY)}.`,
     );
     alarm(
+      'AgentErrors',
+      this.agentFunction.metricErrors({ period: fiveMinutes, statistic: 'Sum' }),
+      1,
+      'The agent function failed (an error, a crash or a timeout) in the last 5 minutes.',
+    );
+    alarm(
+      'AgentThrottles',
+      this.agentFunction.metricThrottles({ period: fiveMinutes, statistic: 'Sum' }),
+      1,
+      `The agent function was throttled: it reached its reserved concurrency of ${String(AGENT_RESERVED_CONCURRENCY)}.`,
+    );
+    alarm(
       'Api5xx',
       this.httpApi.metricServerError({ period: fiveMinutes, statistic: 'Sum' }),
       1,
@@ -277,7 +400,53 @@ export class LeadsApi extends Construct {
         label: 'Pipeline calls failed with 5xx or a timeout',
       }),
       5,
-      'At least 5 pipeline calls from the leads function failed with 5xx or a timeout in 5 minutes: the CRM cannot save leads.',
+      'At least 5 pipeline calls from the CRM functions failed with 5xx or a timeout in 5 minutes: the CRM cannot save leads or answer chat.',
+    );
+    const chatFailures = Object.fromEntries(
+      CHAT_FAILURE_REASONS.map((reason, index) => [
+        `f${String(index)}`,
+        new cloudwatch.Metric({
+          namespace: METRICS_NAMESPACE,
+          metricName: METRIC.chatFailed,
+          dimensionsMap: { service: SERVICE_NAME, reason },
+          statistic: 'Sum',
+          period: fiveMinutes,
+        }),
+      ]),
+    );
+    alarm(
+      'ChatFailed',
+      new cloudwatch.MathExpression({
+        expression: Object.keys(chatFailures).join(' + '),
+        usingMetrics: chatFailures,
+        period: fiveMinutes,
+        label: 'Chat turns that returned no answer',
+      }),
+      3,
+      'At least 3 chat turns returned no answer in 5 minutes (a model, pipeline or citation failure).',
+    );
+    const day = Duration.days(1);
+    const tokens = (metricName: string) =>
+      new cloudwatch.Metric({
+        namespace: METRICS_NAMESPACE,
+        metricName,
+        dimensionsMap: { service: SERVICE_NAME },
+        statistic: 'Sum',
+        period: day,
+      });
+    alarm(
+      'ChatDailyTokens',
+      new cloudwatch.MathExpression({
+        expression: 'input + output',
+        usingMetrics: {
+          input: tokens(METRIC.chatInputTokens),
+          output: tokens(METRIC.chatOutputTokens),
+        },
+        period: day,
+        label: 'Chat model tokens in a day',
+      }),
+      DAILY_TOKEN_ALARM,
+      `Chat used ${DAILY_TOKEN_ALARM.toLocaleString('en-US')} model tokens in a day: three quarters of the daily cap, after which chat answers 503 until 00:00 UTC.`,
     );
   }
 }

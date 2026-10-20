@@ -2,6 +2,7 @@ import {
   LeadFilterSchema,
   leadKey,
   matchesLeadFilter,
+  type ChatResponse,
   type Lead,
   type LeadFailure,
 } from '@roofing-crm/shared';
@@ -28,6 +29,53 @@ export interface FakeCrm {
   put: (workspace: string, lead: Lead) => void;
   /** Makes these rows fail as the function would report them. */
   failRows: Map<string, LeadFailure>;
+  /** The agent's answer to the next `agent.chat`; a number answers that HTTP status (503: budget). */
+  chat: (input: Record<string, unknown>, requestId: string) => ChatResponse | number;
+}
+
+/** A synthetic agent answer citing the fixture property fx-1 and its permit. */
+export function fixtureChatResponse(
+  requestId: string,
+  extra: Partial<ChatResponse> = {},
+): ChatResponse {
+  return {
+    outcome: 'answered',
+    answer: 'One long-open permit:\n- [[permit:FX-1 BP]] on [[property:fx-1]], open 8.2 years.',
+    assumptions: ['"Older than five years" read as open five years or more.'],
+    tool_calls: [
+      {
+        id: 't1',
+        name: 'search_permits',
+        args: { min_open_years: 5 },
+        status: 'ok',
+        total: 1,
+        returned: 1,
+        result_summary: '1 matches, 1 returned',
+      },
+    ],
+    evidence: [
+      {
+        kind: 'permit',
+        tool_call_id: 't1',
+        property_id: 'fx-1',
+        permit_id: 'FX-1 BP',
+        contractor_attribution_key: null,
+        record_cid: null,
+        source_url: 'https://example.org/permits/FX-1',
+        label: '1 FIXTURE ST, TESTVILLE 00000',
+      },
+    ],
+    limitations: [
+      { source: 'bbb.org', reason: 'blocked', detail: 'BBB is blocked at the source.' },
+    ],
+    center_used: { name: 'AUSTIN', kind: 'city', lat: 30.2672, lon: -97.7431 },
+    leads_created: [],
+    run_id: 'fixture-run',
+    model_id: 'us.anthropic.claude-sonnet-4-6',
+    prompt_version: 'pidgeot-agent.prompt.test',
+    request_id: requestId,
+    ...extra,
+  };
 }
 
 let requests = 0;
@@ -91,6 +139,9 @@ export function fakeCrm(): FakeCrm {
   const calls: CrmCall[] = [];
   const failRows = new Map<string, LeadFailure>();
   let created = 0;
+  const fake: { chat: FakeCrm['chat'] } = {
+    chat: (_, requestId) => fixtureChatResponse(requestId),
+  };
 
   const workspace = (id: string): Map<string, Lead> => {
     let leads = store.get(id);
@@ -169,6 +220,29 @@ export function fakeCrm(): FakeCrm {
         }));
         return ok({ rows, request_id: requestId }, requestId);
       }
+      case 'agent.chat': {
+        const answer = fake.chat(input, requestId);
+        if (typeof answer === 'number') {
+          return Response.json(
+            {
+              error: {
+                message:
+                  "The assistant's daily budget is used up; it answers again after 00:00 UTC.",
+                code: -32603,
+                data: {
+                  code: 'SERVICE_UNAVAILABLE',
+                  httpStatus: answer,
+                  requestId,
+                  failure: null,
+                  reason: 'budget_exhausted',
+                },
+              },
+            },
+            { status: answer, headers: { 'x-request-id': requestId } },
+          );
+        }
+        return ok(answer, requestId);
+      }
       default:
         return Promise.resolve(
           Response.json({ error: { message: 'no such procedure' } }, { status: 404 }),
@@ -180,6 +254,12 @@ export function fakeCrm(): FakeCrm {
     handle,
     calls,
     failRows,
+    get chat() {
+      return fake.chat;
+    },
+    set chat(respond) {
+      fake.chat = respond;
+    },
     leads: (id) => [...workspace(id).values()],
     put: (id, lead) => {
       workspace(id).set(leadKey(lead), lead);

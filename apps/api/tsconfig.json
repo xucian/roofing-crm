@@ -3,5 +3,5 @@
   "compilerOptions": {
     "lib": ["ES2023", "DOM"]
   },
-  "include": ["cdk/**/*.ts", "src/**/*.ts", "vitest.config.ts"]
+  "include": ["cdk/**/*.ts", "scripts/**/*.ts", "src/**/*.ts", "vitest.config.ts"]
 }

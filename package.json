@@ -17,7 +17,8 @@
     "format:check": "prettier --check .",
     "check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test && pnpm build && pnpm synth && pnpm --filter @roofing-crm/pipeline-client check:pin",
     "basemap": "tsx scripts/basemap.ts",
-    "deploy:aws": "tsx scripts/deploy.ts"
+    "deploy:aws": "tsx scripts/deploy.ts",
+    "agent:golden": "pnpm --filter @roofing-crm/api golden"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.0",

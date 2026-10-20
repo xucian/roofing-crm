@@ -62,6 +62,7 @@ describe('describeCrmApiError', () => {
       code: 'NOT_FOUND',
       requestId: 'crm-1',
       failure: { code: 'not_found', message: 'x', pipeline_request_id: 'pl-1' },
+      reason: null,
     });
   });
 

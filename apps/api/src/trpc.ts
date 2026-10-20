@@ -1,5 +1,6 @@
 import { initTRPC } from '@trpc/server';
-import type { LeadFailure } from '@roofing-crm/shared';
+import type { AgentUnavailableReason, LeadFailure } from '@roofing-crm/shared';
+import { AgentUnavailable } from './agent/errors';
 import type { Context } from './context';
 import { METRIC } from './metric-names';
 import { LeadRowFailure } from './leads/service';
@@ -8,8 +9,10 @@ import { LeadRowFailure } from './leads/service';
 export interface ErrorData {
   /** API Gateway's request id: the CRM log lines of this request carry it as `request_id`. */
   requestId: string | null;
-  /** Why a lead could not be saved, with the pipeline's request id when a pipeline call failed. */
+  /** Why a lead could not be saved (or a chat turn could not read the pipeline), with its request id. */
   failure: LeadFailure | null;
+  /** Why the agent refused the turn (503). */
+  reason: AgentUnavailableReason | null;
 }
 
 const t = initTRPC.context<Context>().create({
@@ -21,6 +24,7 @@ const t = initTRPC.context<Context>().create({
       ...shape.data,
       requestId: ctx?.requestId ?? null,
       failure,
+      reason: error.cause instanceof AgentUnavailable ? error.cause.reason : null,
     };
     return {
       ...shape,
@@ -36,7 +40,7 @@ const t = initTRPC.context<Context>().create({
 
 export const router = t.router;
 
-/** Every procedure: its duration in ProcessingDuration, by operation (`create`, `createMany`, `list`). */
+/** Every procedure: its duration in ProcessingDuration, by operation (`create`, …, `chat`). */
 export const publicProcedure = t.procedure.use(async ({ ctx, path, next }) => {
   const started = Date.now();
   try {

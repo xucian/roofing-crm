@@ -43,6 +43,8 @@ export interface CrmApiFailure {
   requestId: string | null;
   /** Why a lead could not be saved, with the pipeline's request id, when that was the cause. */
   failure: LeadFailure | null;
+  /** Why the agent refused a turn (503): `budget_exhausted`, `model_unavailable`, `circuit_open`. */
+  reason: string | null;
 }
 
 interface ErrorShapeData {
@@ -50,6 +52,7 @@ interface ErrorShapeData {
   httpStatus?: number;
   requestId?: string | null;
   failure?: LeadFailure | null;
+  reason?: string | null;
 }
 
 export function describeCrmApiError(error: unknown): CrmApiFailure {
@@ -69,7 +72,14 @@ export function describeCrmApiError(error: unknown): CrmApiFailure {
             ? 'The CRM API could not be reached.'
             : `The CRM API failed (HTTP ${String(status)}).`
         : error.message;
-    return { message, status, code: data?.code ?? null, requestId, failure: data?.failure ?? null };
+    return {
+      message,
+      status,
+      code: data?.code ?? null,
+      requestId,
+      failure: data?.failure ?? null,
+      reason: data?.reason ?? null,
+    };
   }
   return {
     message: error instanceof Error ? error.message : String(error),
@@ -77,5 +87,6 @@ export function describeCrmApiError(error: unknown): CrmApiFailure {
     code: null,
     requestId: null,
     failure: null,
+    reason: null,
   };
 }

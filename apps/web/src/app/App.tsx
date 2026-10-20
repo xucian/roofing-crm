@@ -10,6 +10,8 @@ import {
   type Lead,
 } from '@roofing-crm/shared';
 import { useMemo, useRef, useState } from 'react';
+import { AssistantPage } from '../assistant/AssistantPage';
+import { useChat } from '../assistant/use-chat';
 import type { RuntimeConfig } from '../config/runtime-config';
 import { PropertyDrawer } from '../details/PropertyDrawer';
 import { useOpenProperty } from '../details/use-open-property';
@@ -73,6 +75,8 @@ export function App({ config }: { config: RuntimeConfig }) {
     [leadFilter, search.center, search.radiusMiles],
   );
   const leads = useLeads(crm, workspace, route === 'leads' ? activeLeadFilter : null);
+  // The assistant's conversation lives here too, so it survives a visit to the map.
+  const chat = useChat(crm, workspace, leads.reload);
 
   // A GPS fix inside the map's box but outside the county: the server's area_note says so, and the
   // search goes back to the center it had (docs/decisions.md §4, 2026-10-17).
@@ -134,6 +138,11 @@ export function App({ config }: { config: RuntimeConfig }) {
     const { lat, lon } = lead.snapshot;
     if (lat !== null && lon !== null) dispatch({ type: 'pin', point: { lat, lon } });
     openProperty(lead.property_id);
+    navigate('map');
+  };
+  // A citation or a record in an answer: its property opens in the drawer on the map.
+  const openOnMap = (propertyId: string): void => {
+    openProperty(propertyId);
     navigate('map');
   };
   const openFromMap = (propertyId: string): void => {
@@ -250,6 +259,11 @@ export function App({ config }: { config: RuntimeConfig }) {
             }}
             onShowOnMap={showOnMap}
           />
+        </div>
+      ) : null}
+      {route === 'assistant' ? (
+        <div className="leads-pane">
+          <AssistantPage chat={chat} pin={search.center} onOpenProperty={openOnMap} />
         </div>
       ) : null}
       <Footer config={config} meta={meta} />

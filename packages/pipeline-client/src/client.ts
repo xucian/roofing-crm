@@ -26,6 +26,12 @@ export type PermitSearchResponse = PipelineSchemas['PermitSearchResponse'];
 export type PermitSearchQuery = NonNullable<
   paths['/v1/permits/search']['get']['parameters']['query']
 >;
+export type PermitTextSearchResponse = PipelineSchemas['PermitTextSearchResponse'];
+export type PermitTextSearchQuery = NonNullable<
+  paths['/v1/permits/text-search']['get']['parameters']['query']
+>;
+export type Contractor = PipelineSchemas['Contractor'];
+export type Limitation = PipelineSchemas['Limitation'];
 export type Bbb = PipelineSchemas['Bbb'];
 export type Owner = PipelineSchemas['Owner'];
 export type RoofWorkClass = PipelineSchemas['RoofWorkClass'];
@@ -61,6 +67,13 @@ export interface PipelineClient {
     query: PermitSearchQuery,
     options?: CallOptions,
   ): Promise<PipelineAnswer<PermitSearchResponse>>;
+  /** Free-text search over permit descriptions (`/v1/permits/text-search`), for the agent (F5). */
+  searchPermitText(
+    query: PermitTextSearchQuery,
+    options?: CallOptions,
+  ): Promise<PipelineAnswer<PermitTextSearchResponse>>;
+  /** Permits under one printed contractor name and phone: an attribution, not a verified identity. */
+  getContractor(key: string, options?: CallOptions): Promise<PipelineAnswer<Contractor>>;
 }
 
 export interface PipelineClientOptions {
@@ -141,6 +154,23 @@ export function createPipelineClient(options: PipelineClientOptions): PipelineCl
           // The contract's list parameters (`status_group`, `roof_work_class`) are form style
           // without explode: one comma-separated value, not the parameter repeated.
           querySerializer: { array: { style: 'form', explode: false } },
+          signal: callOptions?.signal,
+        }),
+      );
+    },
+    async searchPermitText(query, callOptions) {
+      return answer(
+        await client.GET('/v1/permits/text-search', {
+          params: { query },
+          querySerializer: { array: { style: 'form', explode: false } },
+          signal: callOptions?.signal,
+        }),
+      );
+    },
+    async getContractor(key, callOptions) {
+      return answer(
+        await client.GET('/v1/contractors/{contractor_attribution_key}', {
+          params: { path: { contractor_attribution_key: key } },
           signal: callOptions?.signal,
         }),
       );

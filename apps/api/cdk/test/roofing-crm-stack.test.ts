@@ -1,7 +1,13 @@
 import { runInNewContext } from 'node:vm';
 import { Annotations, Match } from 'aws-cdk-lib/assertions';
 import { afterAll, describe, expect, it } from 'vitest';
-import { LEADS_RESERVED_CONCURRENCY, THROTTLES } from '../lib/leads-api';
+import {
+  AGENT_RESERVED_CONCURRENCY,
+  DAILY_TOKEN_ALARM,
+  LEADS_RESERVED_CONCURRENCY,
+  THROTTLES,
+} from '../lib/leads-api';
+import { DASHBOARD_METRIC_BUDGET } from '../lib/dashboard';
 import { SPA_ROUTING_FUNCTION, runtimeConfig } from '../lib/web-hosting';
 import { API_BASE, cleanupFixtures, synth } from './fixtures';
 
@@ -160,7 +166,7 @@ describe('RoofingCrm stack', () => {
   });
 });
 
-describe('the CRM API (F3, F4)', () => {
+describe('the CRM API (F3 to F5)', () => {
   it('keeps leads in an on-demand table keyed by workspace and lead, with point-in-time recovery', () => {
     const { template } = synth();
     template.resourceCountIs('AWS::DynamoDB::Table', 1);
@@ -187,8 +193,10 @@ describe('the CRM API (F3, F4)', () => {
         (fn as { Properties: { Environment?: { Variables?: Record<string, unknown> } } }).Properties
           .Environment?.Variables?.LEADS_TABLE !== undefined,
     );
-    expect(leads).toHaveLength(1);
+    // The leads function and the agent function (F5).
+    expect(leads).toHaveLength(2);
     template.hasResourceProperties('AWS::Lambda::Function', {
+      Description: 'Roofing CRM API: leads (tRPC)',
       Runtime: 'nodejs22.x',
       Timeout: 29,
       MemorySize: 1024,
@@ -218,13 +226,16 @@ describe('the CRM API (F3, F4)', () => {
     const table = statements.filter((statement) =>
       [statement.Action].flat().some((action) => action.startsWith('dynamodb:')),
     );
-    expect(table).toHaveLength(1);
-    expect([table[0]?.Action].flat().sort()).toEqual([
-      'dynamodb:DeleteItem',
-      'dynamodb:GetItem',
-      'dynamodb:PutItem',
-      'dynamodb:Query',
-      'dynamodb:UpdateItem',
+    // The leads function's, then the agent's, which may not delete.
+    expect(table.map((statement) => [statement.Action].flat().sort())).toEqual([
+      [
+        'dynamodb:DeleteItem',
+        'dynamodb:GetItem',
+        'dynamodb:PutItem',
+        'dynamodb:Query',
+        'dynamodb:UpdateItem',
+      ],
+      ['dynamodb:GetItem', 'dynamodb:PutItem', 'dynamodb:Query', 'dynamodb:UpdateItem'],
     ]);
     const policies = JSON.stringify(template.findResources('AWS::IAM::Policy'));
     for (const action of ['dynamodb:Scan', 'dynamodb:BatchWriteItem', 'dynamodb:*']) {
@@ -239,6 +250,7 @@ describe('the CRM API (F3, F4)', () => {
     );
     expect(keys.sort()).toEqual([
       'GET /api/trpc/{proxy+}',
+      'POST /api/trpc/agent.chat',
       'POST /api/trpc/leads.create',
       'POST /api/trpc/leads.createMany',
       'POST /api/trpc/leads.delete',
@@ -256,6 +268,7 @@ describe('the CRM API (F3, F4)', () => {
         'POST /api/trpc/leads.createMany': { ThrottlingRateLimit: 0.5, ThrottlingBurstLimit: 2 },
         'POST /api/trpc/leads.update': { ThrottlingRateLimit: 2, ThrottlingBurstLimit: 5 },
         'POST /api/trpc/leads.delete': { ThrottlingRateLimit: 2, ThrottlingBurstLimit: 5 },
+        'POST /api/trpc/agent.chat': { ThrottlingRateLimit: 0.5, ThrottlingBurstLimit: 3 },
       },
       AccessLogSettings: { Format: Match.stringLikeRegexp('\\$context.requestId') },
     });
@@ -294,7 +307,7 @@ describe('the CRM API (F3, F4)', () => {
 
   it('raises self-resolving alarms on one topic for failures, throttles and a pipeline outage', () => {
     const { template } = synth();
-    template.resourceCountIs('AWS::CloudWatch::Alarm', 5);
+    template.resourceCountIs('AWS::CloudWatch::Alarm', 9);
     template.allResourcesProperties('AWS::CloudWatch::Alarm', {
       TreatMissingData: 'notBreaching',
       AlarmActions: [Match.objectLike({ Ref: Match.stringLikeRegexp('Alerts') })],
@@ -321,6 +334,90 @@ describe('the CRM API (F3, F4)', () => {
     template.resourceCountIs('AWS::SNS::Subscription', 0);
   });
 
+  it('runs the agent on its own function: Sonnet 4.6 on Bedrock, 5 reserved, traced to LangSmith', () => {
+    const { template } = synth({ langsmithSecretName: 'pidgeot-agent/langsmith-api-key' });
+    template.hasResourceProperties('AWS::Lambda::Function', {
+      Description: Match.stringLikeRegexp('pidgeot-agent'),
+      Runtime: 'nodejs22.x',
+      Timeout: 29,
+      ReservedConcurrentExecutions: AGENT_RESERVED_CONCURRENCY,
+      Environment: {
+        Variables: Match.objectLike({
+          BEDROCK_MODEL_ID: 'us.anthropic.claude-sonnet-4-6',
+          LANGSMITH_PROJECT: 'pidgeot-agent',
+          LANGSMITH_TRACING: 'true',
+          LANGSMITH_API_KEY_SECRET_ID: 'pidgeot-agent/langsmith-api-key',
+          PIPELINE_API_BASE: API_BASE,
+        }),
+      },
+    });
+    const policies = JSON.stringify(template.findResources('AWS::IAM::Policy'));
+    expect(policies).toContain('inference-profile/us.anthropic.claude-sonnet-4-6');
+    for (const region of ['us-east-1', 'us-east-2', 'us-west-2']) {
+      expect(policies).toContain(`bedrock:${region}::foundation-model/anthropic.claude-sonnet-4-6`);
+    }
+    expect(policies).toContain('secret:pidgeot-agent/langsmith-api-key-??????');
+    expect(policies).not.toContain('"bedrock:*"');
+  });
+
+  it('runs the agent untraced, with no secret grant, when the deploy has no LangSmith key', () => {
+    const { template } = synth();
+    template.hasResourceProperties('AWS::Lambda::Function', {
+      Environment: {
+        Variables: Match.objectLike({
+          LANGSMITH_TRACING: 'false',
+          LANGSMITH_API_KEY_SECRET_ID: Match.absent(),
+        }),
+      },
+    });
+    expect(JSON.stringify(template.findResources('AWS::IAM::Policy'))).not.toContain(
+      'secretsmanager:GetSecretValue',
+    );
+  });
+
+  it('alarms on chat turns without an answer and on a day of heavy chat use', () => {
+    const { template } = synth();
+    template.hasResourceProperties('AWS::CloudWatch::Alarm', {
+      Threshold: 3,
+      Metrics: Match.arrayWith([
+        Match.objectLike({
+          MetricStat: Match.objectLike({
+            Metric: Match.objectLike({ MetricName: 'ChatFailed' }),
+          }),
+        }),
+      ]),
+    });
+    template.hasResourceProperties('AWS::CloudWatch::Alarm', {
+      Threshold: DAILY_TOKEN_ALARM,
+      Metrics: Match.arrayWith([
+        Match.objectLike({
+          MetricStat: Match.objectLike({
+            Metric: Match.objectLike({ MetricName: 'ChatInputTokens' }),
+            Period: 86_400,
+          }),
+        }),
+      ]),
+    });
+  });
+
+  it('draws one dashboard inside the free tier: under 50 metrics', () => {
+    const { template } = synth();
+    template.resourceCountIs('AWS::CloudWatch::Dashboard', 1);
+    const dashboard = Object.values(template.findResources('AWS::CloudWatch::Dashboard'))[0] as {
+      Properties: { DashboardBody: { 'Fn::Join': [string, unknown[]] } };
+    };
+    // The body is a JSON document with tokens; each metric is one array under "metrics".
+    const body = JSON.stringify(dashboard.Properties.DashboardBody);
+    const metrics = (
+      body.match(/\[\\"(?:RoofingCrm|AWS\/Lambda|AWS\/ApiGateway|AWS\/Bedrock)\\"/g) ?? []
+    ).length;
+    expect(metrics).toBeGreaterThan(30);
+    expect(metrics).toBeLessThanOrEqual(DASHBOARD_METRIC_BUDGET);
+    for (const title of ['Agent function', 'Chat turns, by outcome', 'Bedrock', 'Alarms']) {
+      expect(body).toContain(title);
+    }
+  });
+
   it('outputs what the handoff links to', () => {
     const { template } = synth();
     for (const output of [
@@ -330,6 +427,10 @@ describe('the CRM API (F3, F4)', () => {
       'ApiAccessLogGroup',
       'LeadsTableName',
       'AlertsTopicArn',
+      'AgentFunctionName',
+      'AgentLogGroup',
+      'BedrockModelId',
+      'DashboardName',
     ]) {
       template.hasOutput(output, Match.anyValue());
     }

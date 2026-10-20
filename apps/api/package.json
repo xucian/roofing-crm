@@ -13,20 +13,25 @@
     "typecheck": "tsc -p tsconfig.json",
     "test": "vitest run",
     "synth": "cdk synth --quiet",
-    "cdk": "cdk"
+    "cdk": "cdk",
+    "golden": "tsx scripts/agent-golden.ts"
   },
   "dependencies": {
+    "@ai-sdk/amazon-bedrock": "5.0.115",
     "@aws-lambda-powertools/logger": "^2.36.0",
     "@aws-lambda-powertools/metrics": "^2.36.0",
     "@aws-lambda-powertools/tracer": "^2.36.0",
     "@aws-sdk/client-dynamodb": "^3.1150.0",
+    "@aws-sdk/client-secrets-manager": "^3.1151.0",
     "@aws-sdk/lib-dynamodb": "^3.1150.0",
     "@middy/core": "^6.4.5",
     "@roofing-crm/pipeline-client": "workspace:*",
     "@roofing-crm/shared": "workspace:*",
     "@trpc/server": "^11.19.0",
+    "ai": "7.0.139",
     "aws-cdk-lib": "^2.270.0",
     "constructs": "^10.4.0",
+    "langsmith": "0.10.13",
     "zod": "^4.6.5"
   },
   "devDependencies": {

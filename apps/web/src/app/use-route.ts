@@ -1,12 +1,19 @@
 import { useEffect, useState } from 'react';
 
-/** The app's pages: the map with its results, and the saved leads. */
-export type Route = 'map' | 'leads';
+/** The app's pages: the map with its results, the saved leads and the assistant. */
+export type Route = 'map' | 'leads' | 'assistant';
 
-export const ROUTE_PATHS: Readonly<Record<Route, string>> = { map: '/', leads: '/leads' };
+export const ROUTE_PATHS: Readonly<Record<Route, string>> = {
+  map: '/',
+  leads: '/leads',
+  assistant: '/assistant',
+};
 
 export function routeOf(pathname: string): Route {
-  return pathname.replace(/\/+$/, '') === ROUTE_PATHS.leads ? 'leads' : 'map';
+  const path = pathname.replace(/\/+$/, '');
+  if (path === ROUTE_PATHS.leads) return 'leads';
+  if (path === ROUTE_PATHS.assistant) return 'assistant';
+  return 'map';
 }
 
 /**

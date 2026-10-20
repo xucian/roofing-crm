@@ -669,3 +669,107 @@ text, this entry wins.
   confirmation, each filter through the function's call, an edited lead the filters no longer keep, and a lead
   deleted elsewhere.
 - **Not done, both extras.** The filters are not in the URL, so a reload clears them. The order stays newest first.
+
+## 2026-10-21 — F5 built: ask in natural language
+
+F4 was verified on the public URL on 2026-10-20 (`docs/progress.md`). F5 is README AC 9 and the demo step "Ask the RAG
+agent a natural-language query for roofing opportunities in the area and show relevant results": `pidgeot-agent` (§6,
+the alakazam entries) behind the Assistant page. It also builds item 17's dashboard. Where this entry differs from
+earlier text, this entry wins.
+
+- **Model: Claude Sonnet 4.6.** It runs by the US inference profile `us.anthropic.claude-sonnet-4-6`, through
+  `@ai-sdk/amazon-bedrock`. This replaces the metagross entry's default `us.anthropic.claude-sonnet-5-5`, because the
+  account denies every Claude model from Opus 4.7 and Sonnet 5 on (pipeline progress, T9). The pipeline's agent runs the
+  same profile and measured 7 to 12 s a turn. The CDK context `bedrockModelId` changes it without a code change.
+- **Runtime** (§3, the metagross entry).
+  - **Its own function.** A second NodejsFunction, `agent`: Node 22, arm64, 1,024 MB, 29 s, X-Ray, reserved
+    concurrency 5. It sits behind its own route, `POST /api/trpc/agent.chat`, at 0.5 requests/s with a burst of 3.
+  - **One router.** `agent.chat` is a tRPC mutation on the router the leads function serves. The agent reaches the
+    router only through the request context, so the `leads` bundle (1.2 MB) carries no AI SDK and the `agent` bundle is
+    2.2 MB.
+  - **IAM.** Bedrock `InvokeModel` on the profile and on its foundation model in us-east-1, us-east-2 and us-west-2.
+    `GetSecretValue` on the LangSmith secret only. On the leads table, GetItem, PutItem, Query and UpdateItem; no
+    DeleteItem.
+- **The turn** (metagross item 13; alakazam items 13 and 14, as in the pipeline agent).
+  - A `ToolLoopAgent` on the model wrapped with the kit's Bedrock prompt caching.
+  - At most 6 steps, 700 output tokens a step and 1,500 a turn.
+  - A 25 s deadline counted from API Gateway's receipt, so a cold start is inside it. One retry, only on throttling or
+    a 5xx. A circuit breaker pauses chat for 30 s after 3 failed turns.
+  - `/v1/meta` is read first and takes the pipeline's cold start.
+  - The deadline or the output budget ends the turn as `limit_reached`, with the evidence found so far.
+- **Tools** (alakazam items 18, 19 and 22; the 2026-10-17 entry). They have the frozen MCP registry's descriptions
+  and bounds (`limit` 20, at most 50; `open_permits` required).
+  - **Eight over the pipeline API.** `resolve_search_center`, `search_properties`, `search_permits`,
+    `search_permit_text`, `get_property`, `get_permit`, `get_contractor` and `get_run_summary`. They use the typed
+    client: one call at a time, inside the deadline, and a failure comes back as a result with the pipeline request id.
+    `get_property` shows the model 20 permits, roofing first in the permit search's order. `get_run_summary` returns the
+    `/v1/meta` read at the start of the turn.
+  - **`list_leads`.** It takes the Leads page's filter (F4) and applies it through `leads.list`.
+  - **`create_lead`.** It saves through `leads.create`, so it takes the same snapshot. The server refuses it unless the
+    latest message asks to save leads (a verb of saving and the word "lead"), unless every id came from a tool result in
+    this turn, and after 5 saves in one turn.
+  - **The search-center rule.** A search's point must be a search center returned in this turn, the map's pin the page
+    sent (new: `map_center` in the request), or numbers the user typed.
+- **Grounding** (alakazam items 8 and 17).
+  - The server builds the evidence from tool results.
+  - The answer and the model's assumption lines are sanitized: no HTML, images, links or bold. Every `[[kind:id]]`
+    token, bare permit number, contractor key, "property <id>" mention and CID must be one a tool returned in this turn.
+    Otherwise the response carries no model text and the outcome `tool_error`.
+  - `answered` and `no_matches` require a successful tool call.
+  - The server adds assumptions (the center used, the identity rule, the durations' date, the snapshot rule for
+    leads) and the limitations from `/v1/meta`.
+  - Responses take the pipeline chat's shape, plus `center_used` and `leads_created`.
+- **Personal data** (alakazam item 9).
+  - **To the model.** The owner's name and mailing address never reach it. Tenure, absentee and out-of-area do, and so
+    do the contractor fields printed on the permit. A lead's note never does.
+  - **Logs.** They hold ids, counts, timings and hashes of free text, never the question or the answer.
+  - **LangSmith.** The traces hold the question and the answer. The earlier messages reach them only as hashes.
+- **Daily budget** (§3).
+  - **Caps.** At most 200 turns and 2,000,000 model tokens per UTC day, counted in one item of the leads table (partition
+    `#agent-usage`, which no ULID workspace matches). Past either cap, chat answers 503 `budget_exhausted` until 00:00
+    UTC.
+  - **Alarms.** `ChatDailyTokens` fires at 1.5 million tokens in a day. `ChatFailed` fires at 3 turns without an
+    answer in 5 minutes. `AgentErrors` and `AgentThrottles` watch the function.
+  - **Bound.** Together with the route throttle and the reservation, this bounds a public endpoint at about $10 of
+    Bedrock a day.
+- **LangSmith** (alakazam item 15; 2026-10-16 entry).
+  - **The secret.** `pnpm deploy:aws` reads only `LANGSMITH_API_KEY` from `.env`. It writes it to the secret
+    `pidgeot-agent/langsmith-api-key` through a file only this user can read, so it is never in argv. It writes a new
+    version only when the key changed.
+  - **The function.** CDK grants the function that secret and sets `LANGSMITH_API_KEY_SECRET_ID` (the runbook's
+    planned `…_SECRET_ARN` becomes the name) and `LANGSMITH_PROJECT=pidgeot-agent`.
+  - **Degrading.** Without a key the stack sets `LANGSMITH_TRACING=false`. An unreadable secret gives the plain AI SDK.
+    Traces are flushed inside the deadline.
+- **Memory** (alakazam item 11). None on the server: the page holds the conversation and sends it whole, within the
+  pipeline chat's bounds (20 messages, 4,000 characters each, 16,000 in all). Over the bounds is 400, never truncated;
+  the page drops the oldest exchanges to stay inside them.
+- **The Assistant page** (`/assistant`; §7's chat panel).
+  - **Asking.** Example questions, the README's first. The map's pin is sent with every question for "around here".
+  - **The answer.** It is plain text with a chip per cited id. A property or permit chip opens the property in the drawer
+    on the map.
+  - **Under each answer.** The outcome and the center used, the assumptions, the records found with their source
+    links and CIDs, the limitations, the tool calls with their parameters, and the request id, model and run.
+  - **Leads.** A turn that saved leads makes the Leads store read them again. The conversation survives a visit to the
+    map.
+- **Dashboard** (item 17, built). It shows both functions, the HTTP API, leads, pipeline calls, chat turns by outcome,
+  failures and refusals, tokens and latency, Bedrock invocations and tokens, and every alarm. It has 48 metrics. It is
+  the account's third dashboard, inside the free tier of 3 dashboards of 50 metrics; the stack test keeps it at 50 or
+  fewer. The F3 entry's reason for deferring it no longer holds.
+- **Golden set** (alakazam item 7). `fixtures/agent/golden.json` holds 10 cases and is committed: questions and
+  expected tool calls, parameters, outcomes and the miss and save rules, never prose.
+  - **The cases.** The README question (`search_permits` with `min_open_years` 5, never `roof_age_min`), aged roofs
+    around the pin, permit text, county-wide owner tenure, out of county, off topic, no save without an ask, save on
+    ask, the user's leads, and a contractor with its BBB status.
+  - **The runner.** `pnpm agent:golden` runs it in-process against the live pipeline and Bedrock, and
+    `pnpm agent:golden --url <WebUrl>` against the deployed agent. Results go to the git-ignored `fixtures/agent/results/`.
+  - **Before the deploy.** On 2026-10-20, in-process: 10 of 10, p50 7.2 s, slowest 18.7 s (the save case, which reads
+    two snapshots).
+- **Dependencies.** `ai` 7.0.139, `@ai-sdk/amazon-bedrock` 5.0.115 and `langsmith` 0.10.13: the newest that pass the
+  repository's 7-day release-age guard (`minimumReleaseAge`). The pipeline runs 7.0.146, 5.0.120 and 0.11.0.
+- **Not done.**
+  - **SAM local** (alakazam item 5). There is no container runtime on the builder's machine, as for F3's DynamoDB Local.
+    The handler is run in-process by the golden runner and the tests instead.
+  - **The recorded-fixture adapter** (item 6). Recorded pipeline answers would be a committed copy of county data
+    (§1, §8). The golden set replays live instead, before and after the deploy.
+  - **A semantic retrieval leg and contractor search by name.** These stay as recorded on 2026-10-16.
+  - **Streaming.** Not built: answers arrive whole, in 7 to 19 s.

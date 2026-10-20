@@ -6,6 +6,8 @@ export { comparePermits, longestOpenRoofingPermit } from './order';
 export type {
   Bbb,
   CallOptions,
+  Contractor,
+  Limitation,
   MatchReason,
   Meta,
   Owner,
@@ -14,6 +16,8 @@ export type {
   PermitSearchQuery,
   PermitSearchResponse,
   PermitSummary,
+  PermitTextSearchQuery,
+  PermitTextSearchResponse,
   PipelineAnswer,
   PipelineClient,
   PipelineClientOptions,

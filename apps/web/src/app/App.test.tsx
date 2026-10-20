@@ -9,7 +9,7 @@ import {
   fixturePermit,
   fixtureProperty,
 } from '../test/fixtures';
-import { fakeCrm, fixtureLead, type FakeCrm } from '../test/fake-crm';
+import { fakeCrm, fixtureChatResponse, fixtureLead, type FakeCrm } from '../test/fake-crm';
 import { App } from './App';
 
 // The WebGL map cannot run in jsdom; a stub shows the props the app hands it.
@@ -889,4 +889,120 @@ describe('F4: manage leads', () => {
       expect(screen.queryByText('Filtering leads…')).not.toBeInTheDocument();
     });
   }
+});
+
+describe('F5: ask the assistant', () => {
+  const config = { pipelineApiBase: API_BASE };
+  const routes = {
+    '/v1/properties/search': () => searchPage([fixtureProperty(1)], 1, null),
+    '/v1/meta': () => ({ body: fixtureMeta() }),
+    '/v1/properties/fx-1': () => ({ body: fixtureDetail(1) }),
+  };
+  const chats = () => crm.calls.filter((call) => call.procedure === 'agent.chat');
+
+  it("answers the README's question with citations, records, assumptions and limitations", async () => {
+    window.history.replaceState(null, '', '/assistant');
+    stubPipeline(routes);
+    render(<App config={config} />);
+    expect(screen.getByRole('link', { name: 'Assistant' })).toHaveAttribute('aria-current', 'page');
+    await userEvent.click(
+      screen.getByRole('button', {
+        name: 'Show me open roofing permits older than five years within five miles of Austin',
+      }),
+    );
+    expect(await screen.findByText('Answered')).toBeInTheDocument();
+    expect(screen.getByText(/around AUSTIN/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Permit FX-1 BP' })).toBeInTheDocument();
+    expect(screen.getByText(/read as open five years or more/)).toBeInTheDocument();
+    expect(screen.getByText('Records found (1)')).toBeInTheDocument();
+    expect(screen.getByText(/BBB is blocked at the source/)).toBeInTheDocument();
+    expect(screen.getByText(/How it searched \(1 tool calls\)/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/^crm-req-/, { selector: '.results-request code' }),
+    ).toBeInTheDocument();
+
+    const [first] = chats();
+    expect(first?.input).toMatchObject({
+      workspace_id: window.localStorage.getItem('roofing-crm.workspace'),
+      messages: [
+        {
+          role: 'user',
+          content: 'Show me open roofing permits older than five years within five miles of Austin',
+        },
+      ],
+      map_center: { lat: 30.2672, lon: -97.7431 },
+    });
+    expect(first?.input.session_id).toMatch(/^[0-9A-Z]{26}$/);
+
+    // A citation opens its property on the map.
+    await userEvent.click(screen.getByRole('button', { name: 'Property fx-1' }));
+    expect(window.location.pathname).toBe('/');
+    expect(
+      await screen.findByRole('complementary', { name: '1 FIXTURE ST, TESTVILLE 00000' }),
+    ).toBeInTheDocument();
+  });
+
+  it('sends the earlier exchange as history with the next question', async () => {
+    window.history.replaceState(null, '', '/assistant');
+    stubPipeline(routes);
+    render(<App config={config} />);
+    const box = screen.getByRole('textbox', { name: 'Your question' });
+    await userEvent.type(box, 'Long-open permits near Austin?{Enter}');
+    await screen.findByText('Answered');
+    await userEvent.type(box, 'Save the first one as a lead{Enter}');
+    await vi.waitFor(() => {
+      expect(chats()).toHaveLength(2);
+    });
+    expect(chats()[1]?.input.messages).toEqual([
+      { role: 'user', content: 'Long-open permits near Austin?' },
+      {
+        role: 'assistant',
+        content:
+          'One long-open permit:\n- [[permit:FX-1 BP]] on [[property:fx-1]], open 8.2 years.',
+      },
+      { role: 'user', content: 'Save the first one as a lead' },
+    ]);
+  });
+
+  it('reads the leads again when a turn saved some', async () => {
+    window.history.replaceState(null, '', '/assistant');
+    stubPipeline(routes);
+    const workspace = '01JBQ7Z0000000000000000000';
+    window.localStorage.setItem('roofing-crm.workspace', workspace);
+    crm.chat = (_, requestId) => {
+      crm.put(workspace, fixtureLead({ property_id: 'fx-1', permit_id: 'FX-1 BP' }, 1));
+      return fixtureChatResponse(requestId, {
+        leads_created: [
+          {
+            lead_id: '01JBQ80000000000000000000A',
+            property_id: 'fx-1',
+            permit_id: 'FX-1 BP',
+            outcome: 'created',
+          },
+        ],
+      });
+    };
+    render(<App config={config} />);
+    expect(await screen.findByRole('link', { name: 'Leads 0' })).toBeInTheDocument();
+    await userEvent.type(
+      screen.getByRole('textbox', { name: 'Your question' }),
+      'Save FX-1 BP as a lead{Enter}',
+    );
+    expect(await screen.findByText('Saved to your leads')).toBeInTheDocument();
+    expect(await screen.findByRole('link', { name: 'Leads 1' })).toBeInTheDocument();
+  });
+
+  it('says why the assistant refused, with the request id', async () => {
+    window.history.replaceState(null, '', '/assistant');
+    stubPipeline(routes);
+    crm.chat = () => 503;
+    render(<App config={config} />);
+    await userEvent.type(
+      screen.getByRole('textbox', { name: 'Your question' }),
+      'Old roofs?{Enter}',
+    );
+    expect(await screen.findByText('The assistant did not answer')).toBeInTheDocument();
+    expect(screen.getByText(/daily budget is used up/)).toBeInTheDocument();
+    expect(screen.getByText(/^crm-req-/)).toBeInTheDocument();
+  });
 });

@@ -18,6 +18,8 @@ describe('readDeployInputs', () => {
       pipelineApiBase: null,
       webDistDir,
       basemapDir: null,
+      langsmithSecretName: null,
+      bedrockModelId: null,
     });
   });
 
