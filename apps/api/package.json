@@ -35,7 +35,6 @@
     "@types/node": "^22.20.0",
     "aws-cdk": "^2.1140.0",
     "aws-sdk-client-mock": "^4.1.0",
-    "esbuild": "^0.28.2",
     "tsx": "^4.21.0",
     "typescript": "~5.9.3",
     "vitest": "^4.1.0"

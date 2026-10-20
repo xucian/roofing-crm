@@ -17,6 +17,9 @@ importers:
       '@types/node':
         specifier: ^22.20.0
         version: 22.20.5
+      esbuild:
+        specifier: ^0.28.2
+        version: 0.28.2
       eslint:
         specifier: ^10.0.0
         version: 10.12.0(jiti@2.7.0)
@@ -105,9 +108,6 @@ importers:
       aws-sdk-client-mock:
         specifier: ^4.1.0
         version: 4.1.0
-      esbuild:
-        specifier: ^0.28.2
-        version: 0.28.2
       tsx:
         specifier: ^4.21.0
         version: 4.23.15
