@@ -33,14 +33,16 @@ export function formatAddress(address: Address): string {
 }
 
 /** "Roof 32 years old" or "Roof age unknown". */
-export function formatRoofAge(property: PropertySummary): string {
+export function formatRoofAge(property: Pick<PropertySummary, 'roof_age_years'>): string {
   const years = property.roof_age_years;
   if (years === null) return 'Roof age unknown';
   return `Roof ${String(years)} ${years === 1 ? 'year' : 'years'} old`;
 }
 
 /** "since 1993, year built on the appraisal roll", or null when the pipeline has no basis. */
-export function formatRoofBasis(property: PropertySummary): string | null {
+export function formatRoofBasis(
+  property: Pick<PropertySummary, 'roof_age_basis' | 'roof_year'>,
+): string | null {
   if (property.roof_age_basis === null) return null;
   const basis = ROOF_AGE_BASIS_LABELS[property.roof_age_basis];
   return property.roof_year === null ? basis : `since ${String(property.roof_year)}, ${basis}`;

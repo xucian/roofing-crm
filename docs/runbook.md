@@ -36,7 +36,7 @@ Deploy from a clean clone, local preview, and the facts the kit cannot put in `R
 - For the basemap: the `pmtiles` CLI (`brew install pmtiles`) or Docker, in which case the script runs the pinned
   `protomaps/go-pmtiles:v1.31.2` image.
 
-## Deploy from a clean clone (F1)
+## Deploy from a clean clone
 
 ```sh
 git clone https://github.com/xucian/roofing-crm.git && cd roofing-crm && git checkout assignment
@@ -45,7 +45,7 @@ pnpm install --frozen-lockfile
 pnpm check          # format, lint, typecheck, tests, build, cdk synth, contract pin: what CI runs
 pnpm basemap        # basemap/: Travis extract, glyphs, sprites, SOURCE.json (about 85 MB, a minute or two)
 export AWS_PROFILE=<profile>
-pnpm deploy:aws     # checks, shows the account and region, asks, builds, deploys, prints the URL
+pnpm deploy:aws     # checks, shows the account and region, asks, builds, deploys, prints the URL and resources
 ```
 
 `pnpm deploy:aws` stops, before any AWS call, if the contract pin is pending. It also stops when the served
@@ -55,9 +55,23 @@ CDK asks before IAM changes (`--require-approval broadening`). The script writes
 prints `WebUrl` and the F1 link. Redeploying updates the same stack, `RoofingCrm`. It reads nothing from `.env`: the
 pipeline API base is `apiBase` in `openapi.pin.json`, and the script says so when `PIPELINE_API_BASE` overrides it.
 
-The stack creates one private S3 bucket (build output and basemap, retained if the stack is deleted), one CloudFront
-distribution with an SPA-routing function and a security-headers policy, and CDK's bucket-deployment Lambda with a
-90-day log group, all tagged `project_name=roofing-crm`.
+The stack, all tagged `project_name=roofing-crm`, creates:
+
+- **Web.** One private S3 bucket for the build output and the basemap, retained if the stack is deleted. One CloudFront
+  distribution with an SPA-routing function and a security-headers policy. CDK's bucket-deployment Lambda with a
+  90-day log group.
+- **CRM API (F3).** An HTTP API that CloudFront serves under `/api/*` (tRPC at `/api/trpc`), with route throttles and a
+  90-day access log. The `leads` Lambda, with a 90-day log group. The DynamoDB table of leads, on demand with
+  point-in-time recovery, retained if the stack is deleted.
+- **Alarms (F3).** One SNS topic and five alarms (`docs/metrics.md`).
+
+On the first deploy that adds IAM resources (F3: the function's role, its table grant and API Gateway's permission to
+invoke it), CDK lists them and asks: answer `y`.
+
+**Alarm email.** After `cdk deploy`, the script looks at the alarm topic. If no email is subscribed, it subscribes
+`ALERT_EMAIL`, or asks for an address (blank skips; `--yes` skips the question). AWS then sends a confirmation email,
+whose "Confirm subscription" link starts the notifications. The address goes to SNS with the AWS CLI: never in git, the
+template or the logs. Later deploys find the subscription and leave it alone.
 
 ## Deployed basemap
 
@@ -73,6 +87,9 @@ distribution with an SPA-routing function and a security-headers policy, and CDK
   calls the pipeline at `apiBase` (the pipeline allows any origin), or at `PIPELINE_API_BASE` when that is set.
 - `pnpm build && pnpm --filter @roofing-crm/web preview` serves the production bundle at http://localhost:4173 under the
   same CSP and headers as CloudFront.
+- The CRM API (leads) is same-origin in AWS and has no local server. To save and list leads from `pnpm dev` or the
+  preview, proxy `/api` to a deployment: `CRM_API_ORIGIN=https://<distribution>.cloudfront.net pnpm dev`. Without it,
+  lead calls fail and the page says so. The leads land in that deployment's table, in this browser's workspace.
 
 ## CI
 
@@ -90,7 +107,11 @@ The stack has termination protection and the bucket is retained:
 aws cloudformation update-termination-protection --no-enable-termination-protection --stack-name RoofingCrm --region us-east-2
 pnpm --filter @roofing-crm/api exec cdk destroy RoofingCrm
 aws s3 rb s3://<WebBucketName> --force --region us-east-2
+aws dynamodb delete-table --table-name <LeadsTableName> --region us-east-2
 ```
+
+`<WebBucketName>` and `<LeadsTableName>` are stack outputs (`cdk-outputs.json`). The alarm topic, and with it the email
+subscription, goes with the stack.
 
 ## Agent identity
 

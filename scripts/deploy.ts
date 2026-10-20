@@ -5,8 +5,12 @@
 // The pipeline API base is `apiBase` in packages/pipeline-client/openapi.pin.json (committed, not a
 // secret); PIPELINE_API_BASE in the environment overrides it. Nothing is read from .env. Steps: refuse
 // without the pinned pipeline contract -> check that the API serves that contract -> show the AWS
-// identity and region -> check the CDK bootstrap -> check the basemap -> build -> cdk deploy -> print
-// the URL and the F1 link.
+// identity and region -> check the CDK bootstrap -> check the basemap -> build -> cdk deploy ->
+// subscribe an email to the alarm topic once -> print the URL, the F1 link and the API's resources.
+//
+// The alarm email is the operator's, so it stays out of git and out of the template: ALERT_EMAIL, or
+// a prompt the first time, subscribes it with the AWS CLI. Later deploys find the subscription and
+// leave it alone.
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline/promises';
@@ -63,13 +67,76 @@ function buildCommit(): string {
   return dirty ? `${commit}-dirty` : commit;
 }
 
-async function confirm(question: string): Promise<boolean> {
+async function ask(question: string): Promise<string> {
   const prompt = createInterface({ input: process.stdin, output: process.stdout });
   try {
-    return /^y(es)?$/i.test((await prompt.question(`${question} [y/N] `)).trim());
+    return (await prompt.question(question)).trim();
   } finally {
     prompt.close();
   }
+}
+
+async function confirm(question: string): Promise<boolean> {
+  return /^y(es)?$/i.test(await ask(`${question} [y/N] `));
+}
+
+interface Subscription {
+  Protocol: string;
+  Endpoint: string;
+  SubscriptionArn: string;
+}
+
+/** One email subscription on the alarm topic, made outside CloudFormation (see the header). */
+async function ensureAlertEmail(topicArn: string, interactive: boolean): Promise<void> {
+  const listed = capture('aws', [
+    'sns',
+    'list-subscriptions-by-topic',
+    '--topic-arn',
+    topicArn,
+    '--region',
+    REGION,
+    '--output',
+    'json',
+  ]);
+  if (listed === null) {
+    console.log(`Could not list the subscriptions of ${topicArn}; alarm email left as it is.`);
+    return;
+  }
+  const emails = (JSON.parse(listed) as { Subscriptions: Subscription[] }).Subscriptions.filter(
+    (subscription) => subscription.Protocol === 'email',
+  );
+  if (emails.length > 0) {
+    const pending = emails.some(
+      (subscription) => subscription.SubscriptionArn === 'PendingConfirmation',
+    );
+    console.log(
+      `Alarm email: ${String(emails.length)} subscription(s)${pending ? ', one still waiting for its confirmation link' : ''}.`,
+    );
+    return;
+  }
+  const email =
+    process.env.ALERT_EMAIL?.trim() ??
+    (interactive ? await ask('Email address for the CRM alarms (blank to skip): ') : '');
+  if (email === '') {
+    console.log('No alarm email subscribed: the alarms change state but notify nobody.');
+    return;
+  }
+  if (!/^[^\s@]+@[^\s@]+$/.test(email)) fail(`Not an email address: ${email}`);
+  run('aws', [
+    'sns',
+    'subscribe',
+    '--topic-arn',
+    topicArn,
+    '--protocol',
+    'email',
+    '--notification-endpoint',
+    email,
+    '--region',
+    REGION,
+    '--output',
+    'text',
+  ]);
+  console.log('AWS has sent a confirmation email: open it and click "Confirm subscription".');
 }
 
 async function main(): Promise<void> {
@@ -151,13 +218,21 @@ async function main(): Promise<void> {
   )[STACK];
   const webUrl = outputs?.WebUrl;
   if (!webUrl) fail(`Deployed, but ${OUTPUTS_FILE} has no WebUrl output.`);
+  if (outputs.AlertsTopicArn) await ensureAlertEmail(outputs.AlertsTopicArn, !values.yes);
+
   const link = `${webUrl}/?lat=${DEFAULT_CENTER.lat.toFixed(5)}&lon=${DEFAULT_CENTER.lon.toFixed(5)}&radius=${String(RADIUS_MILES.default)}&age=${String(ROOF_AGE_THRESHOLD_YEARS.default)}`;
   console.log(`\nDeployed build ${commit}.`);
   console.log(`  URL:            ${webUrl}`);
   console.log(`  F1 link:        ${link}`);
+  console.log(`  Leads page:     ${webUrl}/leads`);
   console.log(`  Distribution:   ${outputs.DistributionId ?? '?'}`);
   console.log(`  Bucket:         ${outputs.WebBucketName ?? '?'}`);
-  console.log('Next: the F1 check in docs/progress.md (open the link, then the three AWS steps).');
+  console.log(`  CRM API:        ${outputs.ApiId ?? '?'} (behind ${webUrl}/api/trpc)`);
+  console.log(`  Leads function: ${outputs.LeadsFunctionName ?? '?'}`);
+  console.log(`  Function logs:  ${outputs.LeadsLogGroup ?? '?'}`);
+  console.log(`  Access logs:    ${outputs.ApiAccessLogGroup ?? '?'}`);
+  console.log(`  Leads table:    ${outputs.LeadsTableName ?? '?'}`);
+  console.log("Next: the current piece's handoff in docs/progress.md.");
 }
 
 main().catch((error: unknown) => {

@@ -12,15 +12,25 @@ at pipeline commit `56b020c`. `API_BASE` is `https://733jzm4xv4.execute-api.us-e
 (Parquet read from its deploy bucket) is live: its letter of 2026-10-20 reports T7 and T8 verified by its operator,
 `API_BASE` and the contract unchanged, and the measured cold times. F1 can be deployed and checked live.
 
-## How F1 fits
+## How the pieces fit
 
 ```
 browser ──HTTPS──▶ CloudFront, stack RoofingCrm (us-east-2) ─┬─ default ─▶ S3: SPA, /config.json
-                                                              └─ basemap/* ▶ S3: travis.pmtiles (Range), glyphs, sprites
+                                                              ├─ basemap/* ▶ S3: travis.pmtiles (Range), glyphs, sprites
+                                                              └─ api/* ───▶ HTTP API ─▶ leads Lambda (tRPC) ─▶ DynamoDB
+                                                                  F3: leads.create, leads.createMany, leads.list
+                                                                      │ per new lead: /v1/meta first, then the permit
+                                                                      ▼ or the property (the snapshot), one at a time
 browser ──HTTPS──▶ pipeline API v1 (API_BASE), one call at a time:
                    /v1/meta (takes the cold start), then /v1/properties/search; /v1/search-centers from the place box
                    F2: /v1/properties/{id} for the drawer; /v1/permits/search?property_id= past its first 50 permits
 ```
+
+Example (F3): "Save lead" on the row of property 103857 sends `POST /api/trpc/leads.create`
+`{workspace_id, property_id: "103857", permit_id: ""}`. The function reads `/v1/meta` and `/v1/properties/103857`
+and writes the lead with its snapshot: 802 BARTON BLVD, roof 18 years old (new construction, 2008), and its
+longest-open roofing permit, 1981-013092 BP, open since 1981-10-23, contractor "Gary Pools", BBB blocked at source,
+from run `20261018T143520Z-t5-full`. Saving it again returns the same lead, with no pipeline call.
 
 Example: the link `<WebUrl>/?lat=30.26720&lon=-97.74310&radius=5&age=15` makes the app call
 `GET {API_BASE}/v1/properties/search?lat=30.2672&lon=-97.7431&radius_miles=5&roof_age_min=15&open_permits=false&limit=500`.
@@ -33,7 +43,7 @@ one row per roof with its match reason and roof-age basis; the call's `x-request
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | 1/5 | F1 | Find aged roofs on the map: hosted URL, Travis County and Austin by default, default search on load, pin and GPS, place box, radius, age threshold, clustered markers, list with total and match reasons, freshness footer, disabled sections (README AC 1-4, 7, 11). Plus CI (item 21). | Pipeline: contract pin and `API_BASE` (done); its T7 correction live (done, 2026-10-20) | Build `c1d594d` on `assignment`: F1 in `25cbc04`, the cold-start changes (decisions, 2026-10-20 §31 entry) and the committed `apiBase` in `0e6926b`, the basemap glyph fix in `c1d594d`. Contract pinned at pipeline `56b020c` (sha256 `7d8ece68…`, equal to the served file). `API_BASE` is `apiBase` in `openapi.pin.json`. Basemap built locally (Protomaps 20261016, sha256 `9e5238…48c8`) and uploaded by this deploy. | verified (2026-10-20) | 2026-10-20, `pnpm check` exit 0: Prettier, ESLint, typecheck, 156 tests (shared 24, pipeline-client 42, web 71, api 19), build, `cdk synth`, pin in sync; `check:served` matches the pin with only the committed `apiBase`. Production bundle under the deployed CSP in Chrome against a local fake pipeline (synthetic rows, scratchpad only): default search, 500 clustered markers, "12,431 matches, showing 500", rows, load more to 1,000, place box choices, footer CIDs, loading and 429-retry states, phone layout; no page errors, no request off the page's origin. | 2026-10-20, default search on the F1 link: request id `FjSrki-ZCYcEPCA=`, 53,308 matches. | Stack `RoofingCrm` (CREATE_COMPLETE 2026-10-20, build `c1d594d`, 307 s), distribution `E1S9QF3GJB2Y3V`, bucket `roofingcrm-webbuckete51352c0-y4fbaarodus7`; links in the F1 handoff. | Expected (pipeline letter, T7 correction live): on an idle pipeline the first call (`/v1/meta`) about 3 to 5 s, 8 to 9 s right after a pipeline deploy or a long idle, then the default search 1.6 to 1.7 s. Actual (agent comparison, 2026-10-20): the API answers the same query with `total` 53,308, as the app shows. `FjSrki-ZCYcEPCA=` is in both pipeline log groups: access log `/v1/properties/search` 200 at 16:33:39 UTC, 542 ms; API log `query` ok, 510 ms. The footer's run `20261018T143520Z-t5-full`, manifest CID `bafybeid6jqq…qiup36ud4` and 177 group CIDs equal `/v1/meta`. | 2026-10-20, live: dragging the pin or clicking the map moves the circle and refreshes the results; the radius change updates them at once. The footer (data source, run, manifest CID, 177 group CIDs, "Atlas: not published yet", build `c1d594d`) stays the same when the pin moves, as expected: it describes the pipeline run, not the search. The rest of step 2 (threshold, place box, location, navigation) checked by hand and as expected. AWS: stack outputs, bucket contents, CloudFront behaviors and invalidations confirmed; the request id has 2 lines in the API log group and 1 in the access log group. 2026-10-17, local preview (no AWS): `pnpm check` passes on the operator's machine; map, pin, radius and threshold work. GPS works in Firefox: a fix outside Travis County keeps the center and says so. Chrome on macOS returns `POSITION_UNAVAILABLE` on every site, browserleaks.com/geo included, so that is the browser's location access, not the app, which falls back to "Drop a pin on the map instead". | 2026-10-20: the first `pnpm deploy:aws` stopped before any AWS change. In `basemap/`, 252 of the 256 "Noto Sans Devanagari Regular v1" glyph files were dangling links: the assets repository links them to "Noto Sans Regular", and `pnpm basemap` copied the links into a temp dir it then deleted. It now copies the bytes and repairs an incomplete copy in place; the archive is unchanged (sha256 `9e5238…`). | None: F1 is verified. Stack `RoofingCrm` stays up for the evaluation. Next piece: F2. |
 | 2/5 | F2 | Permit signal and detail: open and stalled toggle (on by default), long-open ordering, detail drawer with status, open duration, contractor attribution, BBB status, owner public fields, sources and CIDs (AC 5-6) | F1 verified (2026-10-20) | Committed on `assignment` on top of `c1d594d`; deployed 2026-10-20 (77 s); decisions.md, 2026-10-20 F2 entry. Same contract pin and `API_BASE`; no new AWS resource (web update of stack `RoofingCrm`). | verified (2026-10-20) | 2026-10-20, `pnpm check` exit 0: Prettier, ESLint, typecheck, 182 tests after the Escape fix (shared 27, pipeline-client 44, web 92, api 19), build, `cdk synth`, pin in sync. Production bundle in Chrome against the live pipeline (`pnpm build`, `vite preview`): default search with permits on, 54,173 matches, long-open and permit clusters; `?property=` link opens the drawer with the permits sorted, contractor, "Blocked at source", owner and sources; layouts at 1440, 1200 and 500 px. | 2026-10-20: drawer request id `FjbYcj-ACYcEMxw=`; 54,173 matches with the toggle on, 53,308 off. | Stack `RoofingCrm` updated 2026-10-20 (web only); distribution `E1S9QF3GJB2Y3V`, newest invalidation Completed; pipeline log groups as for F1. | Expected: permits on by default; 53,308 matches with the toggle off and 54,173 with it on (live API, 2026-10-20); the drawer's request id in both pipeline log groups. Actual (agent comparison, 2026-10-20): the counts are as expected; `FjbYcj-ACYcEMxw=` is `GET /v1/properties/103857`, 200 at 17:33:03 UTC in 175 ms in the access log, and `query` ok in 152 ms in the API log. | 2026-10-20, live: deploy 77 s. Steps 2.1 to 2.5 as listed, except that Escape did not close the drawer; × did, and `property=` left the URL. The drawer showed the roof age, the permit history, the owner and the sources in detail. The invalidation was checked. Re-check, 2026-10-20: Escape closes the drawer; the operator accepts F2 as verified. | 2026-10-20: the drawer listened for Escape only while focus was inside it, and after step 4 focus was on the permit toggle. It now listens on the page while it is open. A new app test presses Escape with focus on the toggle: it fails on the old code and passes now. | None: F2 is verified. Next piece: F3. |
-| 3/5 | F3 | Save leads: tRPC API, DynamoDB, create one or many, leads page, persistence across reloads (AC 8, creating) | F1 verified (F2 for permit leads) | — | pending | — | — | — | — | — | — | — |
+| 3/5 | F3 | Save leads: tRPC API, DynamoDB, create one or many, leads page, persistence across reloads (AC 8, creating) | F1 and F2 verified (2026-10-20) | Committed on `assignment` as "F3 built: save leads", on top of `ac0aa5a`; decisions.md, 2026-10-20 F3 entry. Same contract pin and `API_BASE`. New in stack `RoofingCrm`: HTTP API with three routes and throttles, `leads` Lambda, leads table, SNS topic, five alarms, CloudFront `/api/*` behaviour. | prepared | 2026-10-20, `pnpm check` exit 0: Prettier, ESLint, typecheck, 246 tests (shared 38, pipeline-client 48, api-client 4, api 54, web 102), build, `cdk synth` with the function bundled, pin in sync. The bundled function loaded in Node: a bad input gets 400 with the request id, a batch gets 400, and the logs are JSON with `request_id`. The handler run locally against the live pipeline with an in-memory table: 6 rows saved in 6.3 s (3 property leads, 1 permit lead, an unknown property `not_found` with the pipeline request id, a permit on the wrong property `mismatch`). Production bundle in Chrome (local API, live pipeline): save one, save 3 ticked, save a permit from the drawer, Leads page after a reload, Show on map; phone width with no horizontal scroll; no page errors. | — | — | Expected: after the handoff below, the workspace has 5 leads, each with a snapshot of run `20261018T143520Z-t5-full`, and they survive a reload; the multi-save's request id is in the `leads` function's log group with one "lead created" line per row. | — | — | Operator: the F3 handoff below. |
 | 4/5 | F4 | Manage leads: status and note editing, delete, filters by status, roof age, permit group, open years and radius (AC 8, managing) | F3 verified | — | pending | — | — | — | — | — | — | — |
 | 5/5 | F5 | Ask in natural language: `pidgeot-agent` on Bedrock through the AI SDK, pipeline and lead tools (AC 9) | F1-F4 | — | pending | — | — | — | — | — | — | — |
 
@@ -71,6 +81,40 @@ Remaining:
 - Nothing to check: the operator ran the handoff below on 2026-10-20 (build `c1d594d`) and F1 is verified.
 - Operator: push `c1d594d` and this progress record to `xucian:assignment`. The pipeline's `assignment` branch, with the
   pinned `56b020c`, is already on GitHub.
+
+## F3 handoff
+
+**Piece 3/5 — F3: save leads.** Same account (561303652468), region (us-east-2) and profile (`cdk-lab`). About ten
+minutes, five of them the deploy.
+
+### Step 1: deploy
+
+`AWS_PROFILE=cdk-lab pnpm deploy:aws`, answer `y`. CDK then lists the new IAM resources (the function's role, its table
+grant, API Gateway's permission to invoke it) and asks: answer `y`. Next it asks for an email address for the alarms:
+enter one, or leave it blank. The deploy is done when it prints `Deployed build …` and the new resources.
+
+### Step 2: use the app
+
+| # | Do | Expect |
+| --- | --- | --- |
+| 1 | Open https://d2ymfvxnntp0j0.cloudfront.net/?lat=30.26720&lon=-97.74310&radius=5&age=15 and click **Save lead** on the first row. | "Saved 1 lead." with a request id; the row says "Saved as lead"; the nav shows "Leads 1". |
+| 2 | Tick **Select** on three more rows, then **Save 3 as leads** in the bar. | "Saved 3 leads." after a few seconds (one pipeline read per row); the three rows say "Saved as lead". Note this request id. |
+| 3 | Open a row, and in the drawer click **Save permit as lead** on a roofing permit. | "Saved 1 lead." in the drawer, and that permit says "Saved as lead". |
+| 4 | Click **Leads** in the nav, then reload the page. | 5 leads, newest first, still there after the reload. Each shows the roof age, a permit with status and open duration, the contractor as printed and "Snapshot of pipeline run 20261018T143520Z-t5-full". |
+| 5 | Click **Show on map** on one. | The map centers on it, with its property open in the drawer. |
+
+### Step 3: one AWS glance
+
+Open DynamoDB's [Explore items](https://us-east-2.console.aws.amazon.com/dynamodbv2/home?region=us-east-2#item-explorer)
+and pick the table that starts with `RoofingCrm-ApiLeads`. It holds 5 items whose `workspace_id` is the id shown at the
+top of the Leads page. I look up the multi-save's request id in the function's logs myself.
+
+### Step 4: reply with
+
+The request id from step 2, and a sentence on what the Leads page showed.
+
+Optional, not a check: if you entered an email in step 1, AWS has sent a "Confirm subscription" email; click its link
+to receive the alarms.
 
 ## F2 handoff (run on 2026-10-20; F2 verified)
 

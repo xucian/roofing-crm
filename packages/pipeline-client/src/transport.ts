@@ -14,7 +14,13 @@ export const SERVER_RETRY_MAX_DELAY_MS = 1000;
  * or fails with its request id, first (pipeline decisions §31).
  */
 export const BROWSER_TIMEOUT_MS = 29_000;
-export const LAMBDA_TIMEOUT_MS = 8_000;
+
+/**
+ * The CRM's own functions take each call's timeout from what is left of their 25 s handler deadline,
+ * capped here (docs/decisions.md, 2026-10-20 cold starts): long enough for a cold pipeline, short
+ * enough to leave the function time to answer.
+ */
+export const SERVER_TIMEOUT_MAX_MS = 20_000;
 
 /**
  * Rejections the gateway or Lambda answer at once (a 429, the account-wide throttle's 503, a 429 the
@@ -40,8 +46,11 @@ export interface RetryEvent {
 export type Sleep = (ms: number, signal?: AbortSignal) => Promise<void>;
 
 export interface PipelineFetchOptions {
-  /** Per attempt, covering the response headers and the body. */
-  timeoutMs: number;
+  /**
+   * Per attempt, covering the response headers and the body. A function is asked before each
+   * attempt, so a caller with a deadline can give each attempt only the time that is left.
+   */
+  timeoutMs: number | (() => number);
   /** The fetch to wrap; `globalThis.fetch` when omitted. */
   fetch?: (request: Request) => Promise<Response>;
   /** Waits between attempts; replaced in tests. */
@@ -136,12 +145,12 @@ export function createPipelineFetch(options: PipelineFetchOptions): PipelineFetc
       }
       attempts += 1;
 
+      const timeoutMs =
+        typeof options.timeoutMs === 'function' ? options.timeoutMs() : options.timeoutMs;
       const attemptController = new AbortController();
       const timer = setTimeout(() => {
-        attemptController.abort(
-          new AttemptTimeout(`no response within ${String(options.timeoutMs)} ms`),
-        );
-      }, options.timeoutMs);
+        attemptController.abort(new AttemptTimeout(`no response within ${String(timeoutMs)} ms`));
+      }, timeoutMs);
       const signal = callerSignal
         ? AbortSignal.any([callerSignal, attemptController.signal])
         : attemptController.signal;

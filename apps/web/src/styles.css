@@ -904,6 +904,244 @@ code {
   }
 }
 
+/* Leads: saving from the results and the drawer, and the Leads page */
+
+.app-main[hidden] {
+  display: none;
+}
+
+.button--small {
+  padding: 3px 10px;
+  font-size: 12.5px;
+}
+
+.link-button {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--color-accent-strong);
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.result-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 4px;
+  padding-top: 6px;
+  border-top: 1px dashed var(--color-border);
+}
+
+.result-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--color-muted);
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+.result-check input {
+  margin: 0;
+  accent-color: var(--color-accent);
+}
+
+.saved-badge {
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--color-accent-weak);
+  color: var(--color-accent-strong);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.selection-bar {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--color-accent);
+  border-radius: var(--radius);
+  background: var(--color-accent-weak);
+  font-weight: 600;
+}
+
+.selection-bar span {
+  flex: 1;
+}
+
+.save-report-anchor {
+  display: grid;
+  scroll-margin: 12px;
+}
+
+.save-report-anchor:empty {
+  display: none;
+}
+
+.save-failures {
+  margin: 6px 0 0;
+  padding-left: 18px;
+  overflow-wrap: anywhere;
+}
+
+.permit-action {
+  margin-left: auto;
+}
+
+.detail-save {
+  margin-top: 4px;
+}
+
+a.nav-item {
+  text-decoration: none;
+}
+
+a.nav-item:not(.nav-item--active) {
+  color: inherit;
+}
+
+a.nav-item:not(.nav-item--active):hover {
+  background: var(--color-surface-muted);
+}
+
+a.nav-item:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 1px;
+}
+
+.nav-count {
+  min-width: 22px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  font-size: 11.5px;
+  text-align: center;
+}
+
+.leads-pane {
+  min-height: 0;
+  overflow-y: auto;
+  background: var(--color-bg);
+}
+
+.leads-page {
+  display: grid;
+  gap: 14px;
+  max-width: 880px;
+  padding: 20px 24px 32px;
+}
+
+.leads-header {
+  display: grid;
+  gap: 6px;
+}
+
+.leads-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0;
+  font-size: 20px;
+  letter-spacing: -0.01em;
+}
+
+.leads-count {
+  padding: 1px 9px;
+  border-radius: 999px;
+  background: var(--color-accent-weak);
+  color: var(--color-accent-strong);
+  font-size: 13px;
+}
+
+.leads-empty {
+  padding: 18px;
+  border: 1px dashed var(--color-border);
+  border-radius: var(--radius);
+  background: var(--color-surface);
+}
+
+.leads-list {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.lead-card {
+  display: grid;
+  gap: 4px;
+  padding: 12px 14px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  background: var(--color-surface);
+}
+
+.lead-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.lead-address {
+  font-size: 15px;
+  font-weight: 650;
+  overflow-wrap: anywhere;
+}
+
+.lead-status {
+  flex: none;
+  padding: 1px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--color-border);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.lead-status--new {
+  border-color: var(--color-info-border);
+  background: var(--color-info-bg);
+}
+
+.lead-kind {
+  color: var(--color-muted);
+  font-size: 12.5px;
+  overflow-wrap: anywhere;
+}
+
+.lead-permit {
+  display: grid;
+  gap: 2px;
+  padding: 6px 8px;
+  border-left: 3px solid var(--color-permit);
+  background: var(--color-surface-muted);
+  overflow-wrap: anywhere;
+}
+
+.lead-permit-label {
+  font-weight: 600;
+}
+
+.lead-actions {
+  margin-top: 4px;
+}
+
+a.button {
+  display: inline-block;
+  text-decoration: none;
+}
+
 /* Footer */
 
 .app-footer {
@@ -1022,6 +1260,10 @@ code {
     bottom: 44px;
     max-width: calc(100% - 140px);
     font-size: 11.5px;
+  }
+
+  .leads-page {
+    padding: 16px 12px 24px;
   }
 
   .side-panel {

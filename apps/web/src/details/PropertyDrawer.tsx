@@ -1,5 +1,5 @@
 import type { Owner, PropertyDetail, PropertySummary } from '@roofing-crm/pipeline-client';
-import { formatCount, formatMiles } from '@roofing-crm/shared';
+import { formatCount, formatMiles, leadKey } from '@roofing-crm/shared';
 import { useEffect, useEffectEvent, useRef } from 'react';
 import { Callout } from '../app/Callout';
 import { ErrorDetails } from '../app/ErrorDetails';
@@ -11,6 +11,8 @@ import {
   formatRoofAnchor,
   formatRoofBasis,
 } from '../results/format-property';
+import { SaveReport } from '../leads/SaveReport';
+import type { LeadTarget, LeadsStore } from '../leads/use-leads';
 import { groupPermits } from './format-permit';
 import { PermitCard } from './PermitCard';
 import { Provenance } from './Provenance';
@@ -26,6 +28,9 @@ export interface PropertyDrawerProps {
   /** The list row of the open property, when it is in the results: its match reasons and distance. */
   summary: PropertySummary | undefined;
   onClose: () => void;
+  /** Saving the property or one of its permits as a lead; null without the CRM API. */
+  leads: LeadsStore | null;
+  onShowLeads: () => void;
 }
 
 /**
@@ -33,7 +38,13 @@ export interface PropertyDrawerProps {
  * every permit with status, open duration, contractor and BBB, the owner's public roll fields, and
  * the sources and CIDs behind them. Owner fields appear here only (§4).
  */
-export function PropertyDrawer({ loader, summary, onClose }: PropertyDrawerProps) {
+export function PropertyDrawer({
+  loader,
+  summary,
+  onClose,
+  leads,
+  onShowLeads,
+}: PropertyDrawerProps) {
   const { state, retry, loadMorePermits } = loader;
   const headingRef = useRef<HTMLHeadingElement>(null);
   const propertyId = state.status === 'closed' ? null : state.propertyId;
@@ -60,6 +71,8 @@ export function PropertyDrawer({ loader, summary, onClose }: PropertyDrawerProps
   }, [open]);
 
   if (state.status === 'closed') return null;
+  // The last save is shown here when it was about this property.
+  const report = leads?.lastSave;
   const address =
     state.status === 'ready'
       ? formatAddress(state.detail.address)
@@ -78,6 +91,9 @@ export function PropertyDrawer({ loader, summary, onClose }: PropertyDrawerProps
         </button>
       </div>
       <div className="detail-body">
+        {leads && report?.targets.some((target) => target.property_id === state.propertyId) ? (
+          <SaveReport key={report.id} report={report} leads={leads} onShowLeads={onShowLeads} />
+        ) : null}
         {state.status === 'loading' ? (
           <PipelineWait
             key={state.propertyId}
@@ -101,6 +117,7 @@ export function PropertyDrawer({ loader, summary, onClose }: PropertyDrawerProps
             pages={state.pages}
             summary={summary?.property_id === state.propertyId ? summary : undefined}
             onMorePermits={loadMorePermits}
+            leads={leads}
           />
         ) : null}
       </div>
@@ -114,12 +131,14 @@ function Detail({
   pages,
   summary,
   onMorePermits,
+  leads,
 }: {
   detail: PropertyDetail;
   requestId: string | undefined;
   pages: PermitPages;
   summary: PropertySummary | undefined;
   onMorePermits: () => void;
+  leads: LeadsStore | null;
 }) {
   const basis = formatRoofBasis(detail);
   const anchor = formatRoofAnchor(detail.roof_age_anchor);
@@ -153,6 +172,19 @@ function Detail({
               </li>
             ))}
           </ul>
+        ) : null}
+        {leads ? (
+          <p className="detail-save">
+            <SaveButton
+              leads={leads}
+              target={{
+                property_id: detail.property_id,
+                permit_id: '',
+                label: formatAddress(detail.address),
+              }}
+              idle="Save property as lead"
+            />
+          </p>
         ) : null}
       </section>
 
@@ -191,7 +223,23 @@ function Detail({
         {roofing.length > 0 ? (
           <ol className="permit-list">
             {roofing.map((permit) => (
-              <PermitCard key={permit.permit_id} permit={permit} />
+              <PermitCard
+                key={permit.permit_id}
+                permit={permit}
+                action={
+                  leads ? (
+                    <SaveButton
+                      leads={leads}
+                      target={{
+                        property_id: detail.property_id,
+                        permit_id: permit.permit_id,
+                        label: `Permit ${permit.permit_id}`,
+                      }}
+                      idle="Save permit as lead"
+                    />
+                  ) : null
+                }
+              />
             ))}
           </ol>
         ) : (
@@ -335,5 +383,32 @@ function OwnerFields({ owner }: { owner: Owner }) {
         <Provenance source={owner.source} unpublished={owner.unpublished_source} />
       </details>
     </>
+  );
+}
+
+/** Saves one property or permit; shows "Saved as lead" once the workspace has it. */
+function SaveButton({
+  leads,
+  target,
+  idle,
+}: {
+  leads: LeadsStore;
+  target: LeadTarget;
+  idle: string;
+}) {
+  const key = leadKey(target);
+  if (leads.savedKeys.has(key)) return <span className="saved-badge">Saved as lead</span>;
+  const saving = leads.savingKeys.has(key);
+  return (
+    <button
+      type="button"
+      className="button button--quiet button--small"
+      disabled={saving}
+      onClick={() => {
+        leads.save([target]);
+      }}
+    >
+      {saving ? 'Saving…' : idle}
+    </button>
   );
 }

@@ -108,6 +108,13 @@ describe('createPipelineClient', () => {
     expect(result).toEqual({ data: { property_id: 'fx 1/2' }, requestId: 'req-fixture-1' });
   });
 
+  it('reads one permit, with the space in its number encoded', async () => {
+    answer = { status: 200, body: { permit_id: 'FX-1 BP' } };
+    const result = await client().getPermit('FX-1 BP');
+    expect(seen[0]?.path).toBe('/v1/permits/FX-1%20BP');
+    expect(result).toEqual({ data: { permit_id: 'FX-1 BP' }, requestId: 'req-fixture-1' });
+  });
+
   it('sends list parameters of the permit search comma-separated, as the contract says', async () => {
     answer = { status: 200, body: EMPTY_SEARCH };
     await client().searchPermits({

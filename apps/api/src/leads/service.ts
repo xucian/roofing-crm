@@ -1,0 +1,229 @@
+import type { Logger } from '@aws-lambda-powertools/logger';
+import {
+  PipelineError,
+  describePipelineError,
+  longestOpenRoofingPermit,
+  type PermitSummary,
+  type PipelineClient,
+  type PropertySummary,
+} from '@roofing-crm/pipeline-client';
+import {
+  LeadSchema,
+  leadKey,
+  type CreateLeadResult,
+  type CreateManyLeadsResult,
+  type CreateManyRowResult,
+  type Lead,
+  type LeadFailure,
+  type LeadPage,
+  type LeadSnapshot,
+} from '@roofing-crm/shared';
+import { MIN_CALL_MS, DEADLINE_RESERVE_MS, type Deadline } from '../deadline';
+import { METRIC } from '../metric-names';
+import type { RequestMetrics } from '../observability';
+import { DeadlineExceeded } from '../pipeline';
+import type { LeadRepository } from './repository';
+import { buildSnapshot, permitSnapshot } from './snapshot';
+
+/** One row could not be saved; `create` throws it, `createMany` reports it in the row. */
+export class LeadRowFailure extends Error {
+  override readonly name = 'LeadRowFailure';
+  constructor(readonly failure: LeadFailure) {
+    super(failure.message);
+  }
+}
+
+export interface LeadServiceDeps {
+  repository: LeadRepository;
+  pipeline: PipelineClient;
+  deadline: Deadline;
+  metrics: RequestMetrics;
+  logger: Pick<Logger, 'info' | 'warn'>;
+  now?: () => Date;
+  newId: () => string;
+}
+
+export interface LeadService {
+  create(input: {
+    workspace_id: string;
+    property_id: string;
+    permit_id: string;
+  }): Promise<CreateLeadResult>;
+  createMany(input: {
+    workspace_id: string;
+    rows: { property_id: string; permit_id: string }[];
+  }): Promise<CreateManyLeadsResult>;
+  list(input: {
+    workspace_id: string;
+    cursor?: string | null | undefined;
+    limit: number;
+  }): Promise<LeadPage>;
+}
+
+interface Ref {
+  property_id: string;
+  permit_id: string;
+}
+
+const DIMENSIONS = { operation: 'create' } as const;
+
+/**
+ * Saving leads (README AC 8, the creating half). Per row: an existing lead is returned as it is, with
+ * no pipeline call; otherwise the function reads `/v1/meta` (once per request, first, so it takes the
+ * pipeline's cold start), then the permit (which embeds its property) or the property, builds the
+ * snapshot and writes the lead with a conditional put. Rows run one after another, never in
+ * parallel, and a row that would start after the deadline fails as `deadline` without a write, so
+ * the browser can send it again.
+ */
+export function createLeadService(deps: LeadServiceDeps): LeadService {
+  const now = deps.now ?? (() => new Date());
+  let run: Promise<string> | null = null;
+
+  // A failed /v1/meta fails the rows after it too: the pipeline is down or busy for this request.
+  const runId = (): Promise<string> => {
+    run ??= deps.pipeline.getMeta().then((answer) => answer.data.run.run_id);
+    return run;
+  };
+
+  // Only the first 50 permits are embedded, unordered: past that, the permit search, whose order is
+  // the contract's, finds the property's longest-open open or stalled roofing permit.
+  const searchedLeadPermit = async (propertyId: string): Promise<PermitSummary | null> => {
+    const { data } = await deps.pipeline.searchPermits({
+      property_id: propertyId,
+      status_group: ['open', 'stalled'],
+      roofing_only: true,
+      limit: 1,
+    });
+    return data.items[0] ?? null;
+  };
+
+  const readSnapshot = async (ref: Ref): Promise<LeadSnapshot> => {
+    const currentRun = await runId();
+    if (ref.permit_id !== '') {
+      const { data: permit } = await deps.pipeline.getPermit(ref.permit_id);
+      if (permit.property_id !== ref.property_id) {
+        throw new LeadRowFailure({
+          code: 'mismatch',
+          message: `Permit ${ref.permit_id} belongs to property ${permit.property_id}, not ${ref.property_id}.`,
+          pipeline_request_id: null,
+        });
+      }
+      const property: PropertySummary =
+        permit.property ?? (await deps.pipeline.getProperty(permit.property_id)).data;
+      return buildSnapshot({
+        property,
+        permit: permitSnapshot(permit, 'saved'),
+        runId: currentRun,
+        takenAt: now(),
+      });
+    }
+
+    const { data: property } = await deps.pipeline.getProperty(ref.property_id);
+    const lead = property.permits_truncated
+      ? await searchedLeadPermit(property.property_id)
+      : longestOpenRoofingPermit(property.permits);
+    return buildSnapshot({
+      property,
+      permit: lead ? permitSnapshot(lead, 'longest_open') : null,
+      runId: currentRun,
+      takenAt: now(),
+    });
+  };
+
+  const failureOf = (error: unknown): LeadFailure => {
+    if (error instanceof LeadRowFailure) return error.failure;
+    if (error instanceof DeadlineExceeded || deps.deadline.signal.aborted) {
+      return {
+        code: 'deadline',
+        message: 'The request ran out of time before this row. Nothing was saved; try it again.',
+        pipeline_request_id: error instanceof PipelineError ? (error.requestId ?? null) : null,
+      };
+    }
+    if (error instanceof PipelineError) {
+      return {
+        code: error.kind === 'http' && error.status === 404 ? 'not_found' : 'pipeline',
+        message: describePipelineError(error),
+        pipeline_request_id: error.requestId ?? null,
+      };
+    }
+    throw error;
+  };
+
+  const createOne = async (workspaceId: string, ref: Ref): Promise<CreateManyRowResult> => {
+    const key = leadKey(ref);
+    const existing = await deps.repository.get(workspaceId, key);
+    if (existing) {
+      deps.metrics.count(METRIC.leadProcessed, DIMENSIONS);
+      deps.logger.info('lead exists', { ...ref, lead_id: existing.lead_id, outcome: 'existing' });
+      return { ...ref, outcome: 'existing', lead: existing };
+    }
+
+    let snapshot: LeadSnapshot;
+    try {
+      if (deps.deadline.remainingMs() - DEADLINE_RESERVE_MS < MIN_CALL_MS) {
+        throw new DeadlineExceeded(key);
+      }
+      snapshot = await readSnapshot(ref);
+    } catch (error) {
+      const failure = failureOf(error);
+      deps.metrics.count(METRIC.leadFailed, { ...DIMENSIONS, reason: failure.code });
+      deps.logger.warn('lead not saved', {
+        ...ref,
+        outcome: 'failed',
+        reason: failure.code,
+        pipeline_request_id: failure.pipeline_request_id,
+      });
+      return { ...ref, outcome: 'failed', error: failure };
+    }
+
+    const at = now().toISOString();
+    const lead: Lead = LeadSchema.parse({
+      lead_id: deps.newId(),
+      property_id: ref.property_id,
+      permit_id: ref.permit_id,
+      status: 'new',
+      note: '',
+      snapshot,
+      created_at: at,
+      updated_at: at,
+    });
+    const put = await deps.repository.putNew(workspaceId, lead);
+    const outcome = put.created ? 'created' : 'existing';
+    deps.metrics.count(METRIC.leadProcessed, DIMENSIONS);
+    deps.logger.info(put.created ? 'lead created' : 'lead exists', {
+      ...ref,
+      lead_id: put.lead.lead_id,
+      outcome,
+      run_id: snapshot.run_id,
+    });
+    return { ...ref, outcome, lead: put.lead };
+  };
+
+  return {
+    async create(input) {
+      const row = await createOne(input.workspace_id, input);
+      if (row.outcome === 'failed') throw new LeadRowFailure(row.error);
+      return { outcome: row.outcome, lead: row.lead };
+    },
+
+    async createMany(input) {
+      // A row listed twice is saved once; both places report the same result.
+      const done = new Map<string, CreateManyRowResult>();
+      for (const ref of input.rows) {
+        const key = leadKey(ref);
+        if (!done.has(key)) done.set(key, await createOne(input.workspace_id, ref));
+      }
+      return {
+        rows: input.rows.map((ref) => {
+          const row = done.get(leadKey(ref));
+          if (!row) throw new Error(`no result for ${leadKey(ref)}`);
+          return row;
+        }),
+      };
+    },
+
+    list(input) {
+      return deps.repository.list(input.workspace_id, input.cursor ?? null, input.limit);
+    },
+  };
+}

@@ -1,3 +1,4 @@
+import { createCrmApiClient } from '@roofing-crm/api-client';
 import type { PropertySearchResponse } from '@roofing-crm/pipeline-client';
 import {
   DEFAULT_CENTER,
@@ -6,12 +7,16 @@ import {
   formatCoordinates,
   isWithinBounds,
   type GeoPoint,
+  type Lead,
 } from '@roofing-crm/shared';
 import { useMemo, useRef, useState } from 'react';
 import type { RuntimeConfig } from '../config/runtime-config';
 import { PropertyDrawer } from '../details/PropertyDrawer';
 import { useOpenProperty } from '../details/use-open-property';
 import { usePropertyDetail } from '../details/use-property-detail';
+import { LeadsPage } from '../leads/LeadsPage';
+import { useLeads } from '../leads/use-leads';
+import { loadWorkspace } from '../leads/workspace';
 import { Legend } from '../map/Legend';
 import { MapView } from '../map/MapView';
 import { NO_RESULTS, resultFeatures } from '../map/layers';
@@ -27,6 +32,7 @@ import { Callout, type CalloutTone } from './Callout';
 import { Footer } from './Footer';
 import { Nav } from './Nav';
 import { useMeta } from './use-meta';
+import { useRoute } from './use-route';
 
 interface Notice {
   tone: CalloutTone;
@@ -34,6 +40,7 @@ interface Notice {
 }
 
 export function App({ config }: { config: RuntimeConfig }) {
+  const [route, navigate] = useRoute();
   const [search, dispatch] = useSearchState();
   const [locating, setLocating] = useState(false);
   const [notice, setNotice] = useState<Notice | null>(null);
@@ -50,6 +57,14 @@ export function App({ config }: { config: RuntimeConfig }) {
   const retry = useRetryEvent(connection?.retries ?? null);
   // First in the queue, before the default search: /v1/meta takes the pipeline's cold start.
   const meta = useMeta(client);
+
+  // The CRM API is same-origin (CloudFront /api/*), so it needs no configuration.
+  const crm = useMemo(
+    () => createCrmApiClient({ fetch: (input, init) => globalThis.fetch(input, init) }),
+    [],
+  );
+  const [workspace] = useState(loadWorkspace);
+  const leads = useLeads(crm, workspace);
 
   // A GPS fix inside the map's box but outside the county: the server's area_note says so, and the
   // search goes back to the center it had (docs/decisions.md §4, 2026-10-17).
@@ -103,6 +118,16 @@ export function App({ config }: { config: RuntimeConfig }) {
     setSelectedId(propertyId);
     setOpenId(propertyId);
   };
+  const showLeads = (): void => {
+    navigate('leads');
+  };
+  // A lead's "Show on map": its position becomes the center and its property opens.
+  const showOnMap = (lead: Lead): void => {
+    const { lat, lon } = lead.snapshot;
+    if (lat !== null && lon !== null) dispatch({ type: 'pin', point: { lat, lon } });
+    openProperty(lead.property_id);
+    navigate('map');
+  };
   const openFromMap = (propertyId: string): void => {
     openProperty(propertyId);
     document
@@ -119,8 +144,16 @@ export function App({ config }: { config: RuntimeConfig }) {
         </div>
         <span className="county-badge">{DEFAULT_COUNTY.label}</span>
       </header>
-      <Nav />
-      <main className={openId === null ? 'app-main' : 'app-main app-main--detail'}>
+      <Nav
+        route={route}
+        onNavigate={navigate}
+        leadCount={leads.view.status === 'ready' ? leads.view.leads.length : null}
+      />
+      {/* The map stays mounted behind the leads, so its view and results are there on return. */}
+      <main
+        className={openId === null ? 'app-main' : 'app-main app-main--detail'}
+        hidden={route !== 'map'}
+      >
         <section className="map-pane" aria-label="Map">
           <MapView
             center={search.center}
@@ -161,6 +194,8 @@ export function App({ config }: { config: RuntimeConfig }) {
             onClose={() => {
               setOpenId(null);
             }}
+            leads={leads}
+            onShowLeads={showLeads}
           />
         ) : null}
         <aside className="side-panel" aria-label="Search and results">
@@ -189,9 +224,16 @@ export function App({ config }: { config: RuntimeConfig }) {
             openPermits={search.openPermits}
             selectedId={selectedId}
             onSelect={openProperty}
+            leads={leads}
+            onShowLeads={showLeads}
           />
         </aside>
       </main>
+      {route === 'leads' ? (
+        <div className="leads-pane">
+          <LeadsPage leads={leads} onShowOnMap={showOnMap} />
+        </div>
+      ) : null}
       <Footer config={config} meta={meta} />
     </div>
   );

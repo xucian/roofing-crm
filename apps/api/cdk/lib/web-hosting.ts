@@ -14,6 +14,8 @@ export interface WebHostingProps {
   webDistDir: string;
   /** The output of `pnpm basemap`; null skips the basemap upload. */
   basemapDir: string | null;
+  /** The CRM API's HTTP API host, served same-origin under `/api/*`. */
+  apiOriginDomain: string;
 }
 
 /** What the SPA reads at start (apps/web/src/config/runtime-config.ts). */
@@ -26,7 +28,7 @@ export function runtimeConfig(props: Pick<WebHostingProps, 'pipelineApiBase'>): 
 /**
  * Viewer-request function on the app behaviour: extension-less paths get index.html so client-side
  * routes load the app. It replaces distribution-wide 403/404 error responses, which would also turn a
- * missing basemap object (and, from F3, an /api/* error) into index.html with status 200.
+ * missing basemap object, or an /api/* error, into index.html with status 200.
  */
 export const SPA_ROUTING_FUNCTION = `function handler(event) {
   var request = event.request;
@@ -43,7 +45,8 @@ const BASEMAP_CACHE = s3deploy.CacheControl.fromString('public, max-age=604800')
 
 /**
  * The public URL: one S3 bucket (private, read through origin access control) behind one CloudFront
- * distribution serving the SPA, /config.json and the self-hosted basemap (metagross items 1, 2, 11).
+ * distribution serving the SPA, /config.json, the self-hosted basemap and, under `/api/*`, the CRM API
+ * (metagross items 1, 2, 11), so the browser calls the API on its own origin: no CORS, no URL to configure.
  */
 export class WebHosting extends Construct {
   readonly bucket: s3.Bucket;
@@ -123,6 +126,21 @@ export class WebHosting extends Construct {
           cachePolicy: cloudfront.CachePolicy.CACHING_OPTIMIZED_FOR_UNCOMPRESSED_OBJECTS,
           responseHeadersPolicy: securityHeaders,
           compress: false,
+        },
+        // The CRM API: never cached, every viewer header but Host forwarded, so the HTTP API sees
+        // the method, body, query and content type the browser sent. HTTPS only: a redirect would
+        // turn a POST into a GET.
+        'api/*': {
+          origin: new origins.HttpOrigin(props.apiOriginDomain, {
+            protocolPolicy: cloudfront.OriginProtocolPolicy.HTTPS_ONLY,
+            readTimeout: Duration.seconds(30),
+          }),
+          viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.HTTPS_ONLY,
+          allowedMethods: cloudfront.AllowedMethods.ALLOW_ALL,
+          cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED,
+          originRequestPolicy: cloudfront.OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER,
+          responseHeadersPolicy: securityHeaders,
+          compress: true,
         },
       },
     });

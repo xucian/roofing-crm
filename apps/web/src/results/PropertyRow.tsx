@@ -11,10 +11,23 @@ import {
   safeHttpUrl,
 } from './format-property';
 
+/** Saving the row as a lead, alone or ticked with others (README AC 8). */
+export interface RowLeadControls {
+  checked: boolean;
+  /** False once the most rows one save takes are ticked and this one is not. */
+  canCheck: boolean;
+  onCheck: (checked: boolean) => void;
+  saved: boolean;
+  saving: boolean;
+  onSave: () => void;
+}
+
 export interface PropertyRowProps {
   property: PropertySummary;
   selected: boolean;
   onSelect: (propertyId: string) => void;
+  /** Null when leads are unavailable (no CRM API). */
+  lead: RowLeadControls | null;
 }
 
 /**
@@ -23,7 +36,7 @@ export interface PropertyRowProps {
  * source record (docs/decisions.md §4 and the 2026-10-17 entry).
  * All text is rendered as text; nothing from the record is interpreted as markup.
  */
-export function PropertyRow({ property, selected, onSelect }: PropertyRowProps) {
+export function PropertyRow({ property, selected, onSelect, lead }: PropertyRowProps) {
   const basis = formatRoofBasis(property);
   const anchor = formatRoofAnchor(property.roof_age_anchor);
   const sourceUrl = safeHttpUrl(property.source.url);
@@ -103,6 +116,39 @@ export function PropertyRow({ property, selected, onSelect }: PropertyRowProps) 
         )}
         , record {property.source.record_id} · property {property.property_id}
       </p>
+      {lead ? <LeadActions address={formatAddress(property.address)} lead={lead} /> : null}
     </li>
+  );
+}
+
+function LeadActions({ address, lead }: { address: string; lead: RowLeadControls }) {
+  return (
+    <div className="result-actions">
+      <label className="result-check">
+        <input
+          type="checkbox"
+          checked={lead.checked}
+          disabled={lead.saved || (!lead.checked && !lead.canCheck)}
+          aria-label={`Select ${address}`}
+          onChange={(event) => {
+            lead.onCheck(event.target.checked);
+          }}
+        />
+        Select
+      </label>
+      {lead.saved ? (
+        <span className="saved-badge">Saved as lead</span>
+      ) : (
+        <button
+          type="button"
+          className="button button--quiet button--small"
+          disabled={lead.saving}
+          aria-label={`Save ${address} as a lead`}
+          onClick={lead.onSave}
+        >
+          {lead.saving ? 'Saving…' : 'Save lead'}
+        </button>
+      )}
+    </div>
   );
 }

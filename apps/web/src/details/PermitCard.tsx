@@ -10,6 +10,7 @@ import {
   isLongOpen,
   permitDates,
 } from './format-permit';
+import type { ReactNode } from 'react';
 import { Provenance } from './Provenance';
 
 /**
@@ -17,7 +18,7 @@ import { Provenance } from './Provenance';
  * as printed with its BBB status, and where each field comes from. Third-party text is rendered as
  * text only.
  */
-export function PermitCard({ permit }: { permit: PermitSummary }) {
+export function PermitCard({ permit, action }: { permit: PermitSummary; action?: ReactNode }) {
   const duration = formatOpenDuration(permit);
   const dates = permitDates(permit);
   const longOpen = isLongOpen(permit);
@@ -32,6 +33,7 @@ export function PermitCard({ permit }: { permit: PermitSummary }) {
           {STATUS_GROUP_LABELS[permit.status_group]}
         </span>
         {longOpen ? <span className="status status--long-open">Long-open</span> : null}
+        {action ? <span className="permit-action">{action}</span> : null}
       </div>
       {duration ? <p className="permit-duration">{duration}</p> : null}
       <p className="permit-work">

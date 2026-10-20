@@ -20,6 +20,7 @@ export type PropertySearchQuery = NonNullable<
 >;
 export type PropertyDetail = PipelineSchemas['PropertyDetail'];
 export type PermitSummary = PipelineSchemas['PermitSummary'];
+export type PermitDetail = PipelineSchemas['PermitDetail'];
 export type PermitContractor = PipelineSchemas['PermitContractor'];
 export type PermitSearchResponse = PipelineSchemas['PermitSearchResponse'];
 export type PermitSearchQuery = NonNullable<
@@ -53,6 +54,8 @@ export interface PipelineClient {
   searchCenters(q: string, options?: CallOptions): Promise<PipelineAnswer<SearchCentersResponse>>;
   /** One property with its owner and its first 50 permits (`permits_total` counts them all). */
   getProperty(propertyId: string, options?: CallOptions): Promise<PipelineAnswer<PropertyDetail>>;
+  /** One permit with its property (when linked), contractor attribution and BBB status. */
+  getPermit(permitId: string, options?: CallOptions): Promise<PipelineAnswer<PermitDetail>>;
   /** Permits by area, status, contractor or property; pages beyond a property's first 50. */
   searchPermits(
     query: PermitSearchQuery,
@@ -120,6 +123,16 @@ export function createPipelineClient(options: PipelineClientOptions): PipelineCl
           signal: callOptions?.signal,
         }),
       );
+    },
+    async getPermit(permitId, callOptions) {
+      // openapi-fetch URL-encodes path parameters: the space in a permit number becomes %20.
+      const result = await client.GET('/v1/permits/{permit_id}', {
+        params: { path: { permit_id: permitId } },
+        signal: callOptions?.signal,
+      });
+      // openapi-fetch's inferred body drops the contract's null-only field (`applicant: null`);
+      // the body is the schema's PermitDetail.
+      return answer(result as { data?: PermitDetail; response: Response });
     },
     async searchPermits(query, callOptions) {
       return answer(

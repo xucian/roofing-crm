@@ -205,6 +205,25 @@ describe('a fast 5xx retries once; timeouts and slow failures do not (pipeline d
     expect(error.kind).toBe('timeout');
   });
 
+  it('asks a timeout function before each attempt, for callers with a deadline', async () => {
+    routes.set('/v1/fast-503', (_req, res) => {
+      reply(res, 503, { message: 'Service Unavailable' });
+    });
+    const asked: number[] = [];
+    let left = 300;
+    const pipelineFetch = createPipelineFetch({
+      timeoutMs: () => {
+        asked.push(left);
+        return (left -= 100);
+      },
+      sleep: () => Promise.resolve(),
+      random: () => 0,
+    });
+    const error = await failure(pipelineFetch(`${base}/v1/fast-503`));
+    expect(error).toMatchObject({ kind: 'http', status: 503, attempts: 2 });
+    expect(asked).toEqual([300, 200]);
+  });
+
   it('does not retry a 5xx that came after the function ran for a while', async () => {
     routes.set('/v1/slow-500', (_req, res) => {
       reply(res, 503, { message: 'Service Unavailable' }, { 'apigw-requestid': 'gw-slow' });

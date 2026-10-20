@@ -12,7 +12,16 @@ const pin = JSON.parse(
   readFileSync(new URL('../../packages/pipeline-client/openapi.pin.json', import.meta.url), 'utf8'),
 ) as { apiBase?: string };
 
+// The CRM API is same-origin in AWS (CloudFront /api/*). Locally, CRM_API_ORIGIN (a deployed
+// CloudFront URL) proxies /api to it; without it, lead calls fail and the page says so.
+const crmApiOrigin = process.env.CRM_API_ORIGIN;
+const apiProxy = crmApiOrigin
+  ? { proxy: { '/api': { target: crmApiOrigin, changeOrigin: true, secure: true } } }
+  : {};
+
 export default defineConfig({
+  server: apiProxy,
+  preview: apiProxy,
   plugins: [
     react(),
     localHosting({

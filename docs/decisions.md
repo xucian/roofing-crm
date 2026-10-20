@@ -498,3 +498,90 @@ entry differs from earlier text, this entry wins.
 - **Tests.** Synthetic permits and property details in the contract's shapes join the fixtures (`FX-` permit ids,
   example.org URLs). The app tests cover the toggle and its URL, the drawer's order and fields, a shared link, a
   failed read with its request id and "Try again", and permit paging with the comma-separated list parameters.
+
+## 2026-10-20 — F3 built: save leads
+
+F2 was verified on the public URL on 2026-10-20 (`docs/progress.md`). F3 is the creating half of README AC 8: save one
+property or permit as a lead, save several from a multi-selection, and list them on a Leads page that survives a
+reload. It adds the stack's first API, table and alarms. Where this entry differs from earlier text, this entry wins.
+
+- **API** (metagross items 3, 9). tRPC 11 on one `leads` NodejsFunction: Node 22, arm64, 1024 MB, 29 s timeout, X-Ray
+  active, everything bundled (the AWS SDK included), no reserved concurrency (2026-10-20 account entry). It sits behind
+  an HTTP API whose `$default` stage CloudFront reaches under `/api/*`: caching disabled, every viewer header but Host
+  forwarded, HTTPS only, since a redirect would turn a POST into a GET. The procedures are `leads.create`,
+  `leads.createMany` and `leads.list`. The tRPC Lambda adapter takes the procedure from a `{proxy+}` parameter or else
+  from the whole path, so the handler strips `/api/trpc` first. The server refuses batches (`allowBatching: false`), as
+  `httpLink` never sends them.
+- **Routes and throttles** (item 4, amended). `POST /api/trpc/leads.create` allows 2 requests/s with a burst of 5, and
+  `POST /api/trpc/leads.createMany` 0.5/s with a burst of 2. Queries go through `GET /api/trpc/{proxy+}` under the stage
+  default of 10/s, burst 20. These are tighter than item 4's example because nothing can be reserved, so the rates
+  alone bound the function. The catch-all is GET only, not ANY: a mutation without its own route gets API Gateway's
+  404, so F4 adds one route per mutation.
+- **Table** (§5, item 22). As decided: on demand, point-in-time recovery, partition key `workspace_id`, sort key
+  `lead_key` = `<property_id>#<permit_id>`. An item is the Lead's fields plus those two keys. The table is retained if
+  the stack is deleted, because leads are user data. The function may GetItem, PutItem and Query; F4 adds UpdateItem
+  and DeleteItem.
+- **Create, per row.**
+  1. An existing lead comes back at once, with no pipeline call (a consistent read).
+  2. Otherwise the function reads `/v1/meta`, once per request and first, then the permit (which embeds its property;
+     the property is read separately only when it is not embedded) or the property.
+  3. It builds the snapshot and writes it with a conditional put. If another request wrote the lead in between, that
+     lead is returned.
+
+  Rows run one after another. A permit whose `property_id` differs from the property named fails as `mismatch`.
+- **Snapshot** (§5). Address, coordinates, roof age with its year and basis, roofing permit counts, and one permit:
+  its status group and printed status, roof work class, open since, open duration, days since expiry, the contractor
+  as printed, and BBB as reported. The run id comes from `/v1/meta`.
+  - For a property lead, that permit is the property's longest-open open or stalled roofing permit, in the permit
+    search's order, so F4's permit filters also work on rows saved from the list. When the property's embedded list is
+    truncated, the permit search with `limit=1` finds it instead.
+  - The contractor is the printed name, else the printed company. Seen live: a permit that prints only "Gary Pools".
+  - Third-party text is cut to the schema's bounds, never refused. The UI labels the whole record as a snapshot.
+- **Time budget.** Each request has 25 s, or the Lambda's remaining time minus 1.5 s if that is less. Each pipeline
+  attempt gets the lesser of 20 s and that remainder. A row that would start with under 2.5 s left fails as
+  `deadline` without a write, and the browser offers to try the failed rows again.
+  - Measured locally against the live pipeline: 6 rows took 6.3 s (7 pipeline calls), so 25 warm rows fit in about
+    23 s. On a cold pipeline the last rows may report `deadline`.
+- **Errors** (§4). Every answer and every error carries `request_id`, API Gateway's request id, which is also sent as
+  `x-request-id`. A failed row adds `pipeline_request_id`. A single create maps its failure to an HTTP status:
+  `not_found` 404, `mismatch` 400, `pipeline` 502, `deadline` 504. An unexpected error does not show its own message.
+- **Browser.**
+  - **Workspace.** The browser keeps a ULID in local storage under `roofing-crm.workspace`. If storage is refused,
+    the workspace lasts for that page only, and the Leads page says so.
+  - **`@roofing-crm/api-client`.** A vanilla tRPC client with `httpLink`, not React Query hooks (item 6 amended): the
+    app's other data hooks are plain React, and the kit's rule allows "React hooks (if using React) or vanilla
+    client".
+  - **Loading and saving.** Leads are read once when the page opens, up to 10 pages of 200. Saves run one at a time.
+  - **Where to save.** Each result row has "Save lead" and a "Select" tick, and a sticky bar offers "Save N as leads"
+    (at most 25). The drawer has "Save property as lead", and "Save permit as lead" on each roofing permit.
+  - **The save report.** It lists the rows created, those already saved and those that failed, with reasons and both
+    request ids, and offers "Try the failed rows again".
+  - **The Leads page.** It is at `/leads` (CloudFront's SPA routing serves it), newest first, with "Show on map". The
+    map stays mounted while the Leads page shows, so it keeps its view and results.
+- **Observability** (items 15, 16).
+  - **Logs.** Powertools Logger writes JSON with `request_id` on every line. It logs ids, outcomes, pipeline request
+    ids and durations, never a snapshot or a note.
+  - **Traces.** Powertools Tracer covers the handler, the DynamoDB client and one subsegment per pipeline call.
+  - **Metrics.** Powertools Metrics, namespace `RoofingCrm`, flushed once per request; `docs/metrics.md` lists them.
+  - **Retention.** Function and access logs are kept 90 days. The access log records neither the IP address nor the
+    user agent.
+- **Alarms** (items 18, 19). Five alarms, each with ALARM and OK actions on one SNS topic:
+  - function errors, at least 1;
+  - function throttles, at least 1;
+  - HTTP API 5xx, at least 1 in 5 minutes;
+  - DynamoDB system errors on the table, at least 1;
+  - `PipelineCallFailed` with status 5xx or timeout, at least 5 in 5 minutes.
+
+  `ChatFailed` arrives with F5. `pnpm deploy:aws` subscribes the email with the AWS CLI, from `ALERT_EMAIL` or a
+  prompt the first time, so the address is in neither git nor the template. The channel is email only, as item 19
+  allows.
+- **Pipeline client.** It gains `getPermit`. `timeoutMs` may now be a function, asked before each attempt.
+  `SERVER_TIMEOUT_MAX_MS` (20 s) replaces `LAMBDA_TIMEOUT_MS` (8 s), as the 2026-10-20 cold-start entry asked. The
+  permit order (`comparePermits`) moves here from the web app, so the snapshot uses the drawer's rule. The synthetic
+  contract fixtures move to `@roofing-crm/pipeline-client/testing`, shared by the web and API tests.
+- **Not done, both extras rather than README criteria.**
+  - Item 17's CloudWatch dashboard: once the account's three free dashboards are used, another costs about $3 a month.
+    `docs/metrics.md` lists every metric and its alarm instead. To be revisited at the PR.
+  - Item 21's DynamoDB Local integration test: there is no container runtime on the builder's machine. The repository
+    is tested with `aws-sdk-client-mock`. The whole handler was also run locally against the live pipeline, with an
+    in-memory table.

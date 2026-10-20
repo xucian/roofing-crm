@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@protomaps/basemaps": "^5.7.0",
+    "@roofing-crm/api-client": "workspace:*",
     "@roofing-crm/pipeline-client": "workspace:*",
     "@roofing-crm/shared": "workspace:*",
     "maplibre-gl": "^6.13.0",

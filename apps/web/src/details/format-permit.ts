@@ -1,9 +1,10 @@
-import type {
-  Bbb,
-  PermitContractor,
-  PermitSummary,
-  RoofWorkClass,
-  StatusGroup,
+import {
+  comparePermits,
+  type Bbb,
+  type PermitContractor,
+  type PermitSummary,
+  type RoofWorkClass,
+  type StatusGroup,
 } from '@roofing-crm/pipeline-client';
 import { PERMIT_SIGNAL, formatDays } from '@roofing-crm/shared';
 
@@ -45,30 +46,11 @@ export function formatPropertyLink(link: PermitSummary['property_link']): string
   return `Linked because ${LINK_METHOD_LABELS[link.match_method]}.`;
 }
 
-const STATUS_ORDER: Readonly<Record<StatusGroup, number>> = {
-  open: 0,
-  stalled: 1,
-  closed: 2,
-  needs_review: 3,
-};
-
 /**
- * The permit search's order (contract, `GET /v1/permits/search`): open, stalled, closed, needs
- * review; then the longest open first, unknown durations last; then the permit id. The permits
- * embedded in a property come unordered, so the drawer sorts them the same way.
+ * The permit search's order, shared with the lead snapshot (`@roofing-crm/pipeline-client`): the
+ * permits embedded in a property come unordered, so the drawer sorts them the same way.
  */
-export function comparePermits(a: PermitSummary, b: PermitSummary): number {
-  const byStatus = STATUS_ORDER[a.status_group] - STATUS_ORDER[b.status_group];
-  if (byStatus !== 0) return byStatus;
-  const aDays = a.open_duration_days;
-  const bDays = b.open_duration_days;
-  if (aDays !== bDays) {
-    if (aDays === null) return 1;
-    if (bDays === null) return -1;
-    return bDays - aDays;
-  }
-  return a.permit_id < b.permit_id ? -1 : a.permit_id > b.permit_id ? 1 : 0;
-}
+export { comparePermits };
 
 /** Roofing permits first (the lead signal), then the property's other permits, each in API order. */
 export function groupPermits(permits: readonly PermitSummary[]): {

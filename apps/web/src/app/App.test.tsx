@@ -9,6 +9,7 @@ import {
   fixturePermit,
   fixtureProperty,
 } from '../test/fixtures';
+import { fakeCrm, type FakeCrm } from '../test/fake-crm';
 import { App } from './App';
 
 // The WebGL map cannot run in jsdom; a stub shows the props the app hands it.
@@ -32,8 +33,14 @@ function stubGeolocation(lat: number, lon: number): void {
   });
 }
 
+// The CRM API's answers when a test does not set its own: an empty workspace.
+let crm: FakeCrm;
+
 beforeEach(() => {
   window.history.replaceState(null, '', '/');
+  window.localStorage.clear();
+  crm = fakeCrm();
+  vi.stubGlobal('fetch', stubFetch({}));
 });
 
 afterEach(() => {
@@ -88,11 +95,14 @@ describe('App', () => {
 const API_BASE = 'https://pipeline.example.org';
 type Route = (url: URL, call: number) => { status?: number; body: unknown; requestId?: string };
 
-function stubPipeline(routes: Record<string, Route>) {
-  const calls: URL[] = [];
+// fetch as the page uses it: the pipeline client passes a Request, tRPC a URL string and init.
+// `/api/trpc/*` goes to the fake CRM API; every other path is the pipeline's. Only pipeline calls are
+// recorded in `calls`, so the order assertions below are about the pipeline queue alone.
+function stubFetch(routes: Record<string, Route>, calls: URL[] = []) {
   const counts = new Map<string, number>();
-  vi.stubGlobal('fetch', (request: Request) => {
-    const url = new URL(request.url);
+  return (input: Request | string | URL, init?: RequestInit) => {
+    const url = new URL(input instanceof Request ? input.url : String(input), window.location.href);
+    if (url.pathname.startsWith('/api/trpc/')) return crm.handle(url, init);
     calls.push(url);
     const call = (counts.get(url.pathname) ?? 0) + 1;
     counts.set(url.pathname, call);
@@ -104,7 +114,12 @@ function stubPipeline(routes: Record<string, Route>) {
         headers: { 'x-request-id': answer.requestId ?? `req-${url.pathname}-${String(call)}` },
       }),
     );
-  });
+  };
+}
+
+function stubPipeline(routes: Record<string, Route>) {
+  const calls: URL[] = [];
+  vi.stubGlobal('fetch', stubFetch(routes, calls));
   return calls;
 }
 
@@ -352,7 +367,7 @@ describe('F2: permit signal and property detail', () => {
       }),
     });
     render(<App config={config} />);
-    await userEvent.click(await screen.findByRole('button', { name: /1 FIXTURE ST/ }));
+    await userEvent.click(await screen.findByRole('button', { name: /^1 FIXTURE ST/ }));
 
     const drawer = await screen.findByRole('complementary', {
       name: '1 FIXTURE ST, TESTVILLE 00000',
@@ -497,5 +512,140 @@ describe('F2: permit signal and property detail', () => {
       roofing_only: 'false',
       limit: '500',
     });
+  });
+});
+
+describe('F3: save leads', () => {
+  const config = { pipelineApiBase: API_BASE };
+  const routes = {
+    '/v1/properties/search': () => searchPage([fixtureProperty(1), fixtureProperty(2)], 2, null),
+    '/v1/meta': () => ({ body: fixtureMeta() }),
+  };
+  const workspaceId = (): string => window.localStorage.getItem('roofing-crm.workspace') ?? '';
+
+  it('saves one row as a property lead and marks it saved', async () => {
+    stubPipeline(routes);
+    render(<App config={config} />);
+    await userEvent.click(
+      await screen.findByRole('button', { name: 'Save 1 FIXTURE ST, TESTVILLE 00000 as a lead' }),
+    );
+
+    expect(await screen.findByText('Saved 1 lead.')).toBeInTheDocument();
+    const row = screen.getByText('1 FIXTURE ST, TESTVILLE 00000').closest('li');
+    expect(within(row!).getByText('Saved as lead')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Leads 1' })).toBeInTheDocument();
+    expect(crm.calls.at(-1)).toEqual({
+      procedure: 'leads.create',
+      input: { workspace_id: workspaceId(), property_id: 'fx-1', permit_id: '' },
+    });
+    expect(workspaceId()).toMatch(/^[0-9A-HJKMNP-TV-Z]{26}$/);
+  });
+
+  it('saves ticked rows together in one request', async () => {
+    stubPipeline(routes);
+    render(<App config={config} />);
+    expect(await screen.findByText(/Tick rows to save several/)).toBeInTheDocument();
+    await userEvent.click(screen.getByLabelText('Select 1 FIXTURE ST, TESTVILLE 00000'));
+    await userEvent.click(screen.getByLabelText('Select 2 FIXTURE ST, TESTVILLE 00000'));
+    expect(screen.getByText('2 selected')).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Save 2 as leads' }));
+    expect(await screen.findByText(/Saved 2 leads\./)).toBeInTheDocument();
+    expect(crm.calls.at(-1)).toEqual({
+      procedure: 'leads.createMany',
+      input: {
+        workspace_id: workspaceId(),
+        rows: [
+          { property_id: 'fx-1', permit_id: '' },
+          { property_id: 'fx-2', permit_id: '' },
+        ],
+      },
+    });
+    expect(screen.getAllByText('Saved as lead')).toHaveLength(2);
+    expect(screen.getByLabelText('Select 1 FIXTURE ST, TESTVILLE 00000')).toBeDisabled();
+  });
+
+  it('reports a row that failed with both request ids, and tries it again', async () => {
+    crm.failRows.set('fx-2#', {
+      code: 'not_found',
+      message: 'Not found in the pipeline API (HTTP 404: not_found).',
+      pipeline_request_id: 'pl-404',
+    });
+    stubPipeline(routes);
+    render(<App config={config} />);
+    await userEvent.click(await screen.findByLabelText('Select 1 FIXTURE ST, TESTVILLE 00000'));
+    await userEvent.click(screen.getByLabelText('Select 2 FIXTURE ST, TESTVILLE 00000'));
+    await userEvent.click(screen.getByRole('button', { name: 'Save 2 as leads' }));
+
+    expect(await screen.findByText('Some rows were not saved')).toBeInTheDocument();
+    expect(screen.getByText(/Saved 1 lead\. 1 row failed\./)).toBeInTheDocument();
+    expect(
+      screen.getByText(/2 FIXTURE ST, TESTVILLE 00000: not in the pipeline/),
+    ).toBeInTheDocument();
+    expect(screen.getByText('pl-404')).toBeInTheDocument();
+    expect(screen.getByText(/^crm-req-/)).toBeInTheDocument();
+
+    crm.failRows.clear();
+    await userEvent.click(screen.getByRole('button', { name: 'Try the failed row again' }));
+    expect(await screen.findByText('Saved 1 lead.')).toBeInTheDocument();
+    expect(crm.calls.at(-1)?.procedure).toBe('leads.create');
+  });
+
+  it('saves a permit from the drawer as a permit lead', async () => {
+    window.history.replaceState(null, '', '/?property=fx-1');
+    stubPipeline({
+      ...routes,
+      '/v1/properties/fx-1': () => ({ body: fixtureDetail(1) }),
+    });
+    render(<App config={config} />);
+    const drawer = await screen.findByRole('complementary', {
+      name: '1 FIXTURE ST, TESTVILLE 00000',
+    });
+    await userEvent.click(
+      await within(drawer).findByRole('button', { name: 'Save permit as lead' }),
+    );
+    expect(await within(drawer).findByText('Saved 1 lead.')).toBeInTheDocument();
+    expect(crm.calls.at(-1)?.input).toMatchObject({ property_id: 'fx-1', permit_id: 'FX-1 BP' });
+    expect(within(drawer).getByRole('button', { name: 'Save property as lead' })).toBeEnabled();
+  });
+
+  it('lists the saved leads on the Leads page after a reload, and shows one on the map', async () => {
+    stubPipeline(routes);
+    const first = render(<App config={config} />);
+    await userEvent.click(
+      await screen.findByRole('button', { name: 'Save 2 FIXTURE ST, TESTVILLE 00000 as a lead' }),
+    );
+    await screen.findByText('Saved 1 lead.');
+    first.unmount();
+
+    // A reload: the same browser workspace, read back from the CRM API.
+    window.history.replaceState(null, '', '/leads');
+    stubPipeline({ ...routes, '/v1/properties/fx-2': () => ({ body: fixtureDetail(2) }) });
+    render(<App config={config} />);
+    const page = await screen.findByRole('region', { name: /Leads/ });
+    expect(await within(page).findByText('2 FIXTURE ST, TESTVILLE 00000')).toBeInTheDocument();
+    expect(within(page).getByText('Property lead · property fx-2')).toBeInTheDocument();
+    expect(within(page).getByText('New')).toBeInTheDocument();
+    expect(within(page).getByText(/Longest-open roofing permit FX-1 BP/)).toBeInTheDocument();
+    expect(within(page).getByText('Open 5.4 years, since 2021-04-01')).toBeInTheDocument();
+    expect(within(page).getByText(/Contractor as printed: FIXTURE ROOFER/)).toBeInTheDocument();
+    expect(within(page).getByText(/Snapshot of pipeline run/)).toBeInTheDocument();
+    expect(within(page).getByText(workspaceId())).toBeInTheDocument();
+
+    await userEvent.click(within(page).getByRole('link', { name: 'Show on map' }));
+    expect(window.location.pathname).toBe('/');
+    expect(screen.queryByRole('region', { name: /Leads/ })).not.toBeInTheDocument();
+    expect(
+      await screen.findByRole('complementary', { name: '2 FIXTURE ST, TESTVILLE 00000' }),
+    ).toBeInTheDocument();
+    expect(screen.getByTestId('map')).toHaveTextContent('30.25,-97.75,5');
+  });
+
+  it('says so when the workspace has no leads yet', async () => {
+    window.history.replaceState(null, '', '/leads');
+    stubPipeline(routes);
+    render(<App config={config} />);
+    expect(await screen.findByText(/No leads yet/)).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Leads 0' })).toHaveAttribute('aria-current', 'page');
   });
 });

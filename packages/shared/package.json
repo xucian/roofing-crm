@@ -17,5 +17,8 @@
     "@roofing-crm/tsconfig": "workspace:*",
     "typescript": "~5.9.3",
     "vitest": "^4.1.0"
+  },
+  "dependencies": {
+    "zod": "^4.6.5"
   }
 }

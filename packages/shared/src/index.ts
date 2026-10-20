@@ -30,3 +30,41 @@ export { PERMISSIONS_POLICY, contentSecurityPolicy, normalizePipelineApiBase } f
 export type { ContentSecurityPolicyOptions } from './hosting';
 export { DISABLED_SECTIONS } from './sections';
 export type { DisabledSection } from './sections';
+export {
+  CREATE_MANY_MAX,
+  CreateLeadInputSchema,
+  CreateManyLeadsInputSchema,
+  LEAD_FAILURE_CODES,
+  LEAD_LIST_PAGE,
+  LEAD_NOTE_MAX,
+  LEAD_STATUSES,
+  LeadPermitSnapshotSchema,
+  LeadRefSchema,
+  LeadSchema,
+  LeadSnapshotSchema,
+  LeadStatusSchema,
+  ListLeadsInputSchema,
+  PermitIdSchema,
+  PropertyIdSchema,
+  SNAPSHOT_TEXT_MAX,
+  WorkspaceIdSchema,
+  leadKey,
+} from './leads';
+export type {
+  CreateLeadInput,
+  CreateLeadOutcome,
+  CreateLeadResult,
+  CreateManyLeadsInput,
+  CreateManyLeadsResult,
+  CreateManyRowResult,
+  Lead,
+  LeadFailure,
+  LeadFailureCode,
+  LeadPage,
+  LeadPermitSnapshot,
+  LeadRef,
+  LeadSnapshot,
+  LeadStatus,
+  ListLeadsInput,
+} from './leads';
+export { ULID_PATTERN, ulid, ulidTime } from './ulid';

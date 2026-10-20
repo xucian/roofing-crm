@@ -56,7 +56,11 @@ export function appWithFlags(): App {
   const { context } = JSON.parse(readFileSync(CDK_JSON, 'utf8')) as {
     context: Record<string, unknown>;
   };
-  return new App({ context, outdir: tempDir('crm-cdk-out-') });
+  // Bundling the leads function is skipped here (`pnpm synth` runs it); tests read the template.
+  return new App({
+    context: { ...context, 'aws:cdk:bundling-stacks': [] },
+    outdir: tempDir('crm-cdk-out-'),
+  });
 }
 
 /** A deploy-shaped synth by default; pass nulls to see the CI-shaped one. */

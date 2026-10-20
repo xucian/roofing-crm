@@ -1,10 +1,14 @@
-import type { RetryEvent } from '@roofing-crm/pipeline-client';
-import { formatCount, formatMatchSummary } from '@roofing-crm/shared';
+import type { PropertySummary, RetryEvent } from '@roofing-crm/pipeline-client';
+import { CREATE_MANY_MAX, formatCount, formatMatchSummary, leadKey } from '@roofing-crm/shared';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Callout } from '../app/Callout';
+import { SaveReport } from '../leads/SaveReport';
+import { propertyTarget } from '../leads/targets';
+import type { LeadTarget, LeadsStore } from '../leads/use-leads';
 import { ErrorDetails } from '../app/ErrorDetails';
 import { PipelineWait } from '../app/PipelineWait';
 import { describeRetry } from '../pipeline/connection';
-import { PropertyRow } from './PropertyRow';
+import { PropertyRow, type RowLeadControls } from './PropertyRow';
 import type { SearchResults } from './property-search';
 import type { PropertySearch } from './use-property-search';
 
@@ -16,6 +20,9 @@ export interface ResultsPanelProps {
   openPermits: boolean;
   selectedId: string | null;
   onSelect: (propertyId: string) => void;
+  /** Saving rows as leads; null when the CRM API is not available. */
+  leads: LeadsStore | null;
+  onShowLeads: () => void;
 }
 
 /**
@@ -29,6 +36,8 @@ export function ResultsPanel({
   openPermits,
   selectedId,
   onSelect,
+  leads,
+  onShowLeads,
 }: ResultsPanelProps) {
   return (
     <section className="panel-section" aria-labelledby="results-heading">
@@ -48,6 +57,8 @@ export function ResultsPanel({
           openPermits={openPermits}
           selectedId={selectedId}
           onSelect={onSelect}
+          leads={leads}
+          onShowLeads={onShowLeads}
         />
       )}
     </section>
@@ -61,10 +72,66 @@ function Results({
   openPermits,
   selectedId,
   onSelect,
+  leads,
+  onShowLeads,
 }: ResultsPanelProps & { search: PropertySearch }) {
   const { view, state, loadMore, retry: searchAgain } = search;
+  const [ticked, setTicked] = useState<ReadonlyMap<string, LeadTarget>>(new Map());
+  const reportRef = useRef<HTMLDivElement>(null);
+  const reportId = leads?.lastSave?.id;
+
+  // A save started far down the list reports at the top of the panel: bring it into view, so a row
+  // that failed is not missed.
+  useEffect(() => {
+    if (reportId !== undefined) reportRef.current?.scrollIntoView({ block: 'nearest' });
+  }, [reportId]);
+
+  // Only the ticked rows still listed count: a new search leaves the old ticks behind.
+  const listed = view.kind === 'ready' ? view.results.items : null;
+  const selection = useMemo(() => {
+    if (!listed) return [];
+    return listed
+      .filter((property) => ticked.has(property.property_id))
+      .map((property) => propertyTarget(property))
+      .filter((target) => !leads?.savedKeys.has(leadKey(target)));
+  }, [listed, ticked, leads?.savedKeys]);
+
+  const controls = (property: PropertySummary): RowLeadControls | null => {
+    if (!leads) return null;
+    const target = propertyTarget(property);
+    const key = leadKey(target);
+    const checked = selection.some((row) => row.property_id === property.property_id);
+    return {
+      checked,
+      canCheck: selection.length < CREATE_MANY_MAX,
+      onCheck: (next) => {
+        setTicked((current) => {
+          const updated = new Map(current);
+          if (next) updated.set(property.property_id, target);
+          else updated.delete(property.property_id);
+          return updated;
+        });
+      },
+      saved: leads.savedKeys.has(key),
+      saving: leads.savingKeys.has(key),
+      onSave: () => {
+        leads.save([target]);
+      },
+    };
+  };
+
   return (
     <>
+      <div ref={reportRef} className="save-report-anchor">
+        {leads?.lastSave ? (
+          <SaveReport
+            key={leads.lastSave.id}
+            report={leads.lastSave}
+            leads={leads}
+            onShowLeads={onShowLeads}
+          />
+        ) : null}
+      </div>
       {retry ? (
         <Callout tone="warning" title="Pipeline busy, retrying">
           {describeRetry(retry)}
@@ -105,6 +172,7 @@ function Results({
                 openPermits={openPermits}
                 selectedId={selectedId}
                 onSelect={onSelect}
+                controls={() => null}
               />
             </div>
           ) : null}
@@ -113,12 +181,25 @@ function Results({
 
       {view.kind === 'ready' ? (
         <>
+          {leads && view.results.items.length > 0 ? (
+            <SelectionBar
+              count={selection.length}
+              onSave={() => {
+                leads.save(selection);
+                setTicked(new Map());
+              }}
+              onClear={() => {
+                setTicked(new Map());
+              }}
+            />
+          ) : null}
           <ResultsList
             results={view.results}
             roofAgeMin={roofAgeMin}
             openPermits={openPermits}
             selectedId={selectedId}
             onSelect={onSelect}
+            controls={controls}
           />
           {view.results.nextCursor !== null ? (
             <button
@@ -152,12 +233,14 @@ function ResultsList({
   openPermits,
   selectedId,
   onSelect,
+  controls,
 }: {
   results: SearchResults;
   roofAgeMin: number;
   openPermits: boolean;
   selectedId: string | null;
   onSelect: (propertyId: string) => void;
+  controls: (property: PropertySummary) => RowLeadControls | null;
 }) {
   return (
     <>
@@ -184,10 +267,44 @@ function ResultsList({
             property={property}
             selected={property.property_id === selectedId}
             onSelect={onSelect}
+            lead={controls(property)}
           />
         ))}
       </ol>
     </>
+  );
+}
+
+/** Ticked rows are saved together, at most 25 per save (one pipeline call per row). */
+function SelectionBar({
+  count,
+  onSave,
+  onClear,
+}: {
+  count: number;
+  onSave: () => void;
+  onClear: () => void;
+}) {
+  if (count === 0) {
+    return (
+      <p className="field-hint">
+        Tick rows to save several as leads at once (up to {String(CREATE_MANY_MAX)}).
+      </p>
+    );
+  }
+  return (
+    <div className="selection-bar" role="group" aria-label="Selected rows">
+      <span>
+        {formatCount(count)} selected
+        {count >= CREATE_MANY_MAX ? ` (the most one save takes)` : null}
+      </span>
+      <button type="button" className="button button--small" onClick={onSave}>
+        Save {formatCount(count)} as {count === 1 ? 'a lead' : 'leads'}
+      </button>
+      <button type="button" className="button button--quiet button--small" onClick={onClear}>
+        Clear
+      </button>
+    </div>
   );
 }
 
