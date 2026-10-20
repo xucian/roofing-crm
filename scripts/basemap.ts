@@ -10,9 +10,11 @@
 // Reads public files only (build.protomaps.com, GitHub); writes nothing outside basemap/ and a temp dir.
 import { createHash } from 'node:crypto';
 import {
+  copyFileSync,
   createReadStream,
   cpSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
@@ -139,7 +141,12 @@ async function copyAssets(outDir: string): Promise<void> {
       const from = join(source, 'fonts', stack);
       if (!existsSync(from))
         fail(`font stack "${stack}" is missing from basemaps-assets@${ASSETS.commit}`);
-      cpSync(from, join(outDir, 'fonts', stack), { recursive: true });
+      // Most "Noto Sans Devanagari Regular v1" ranges are links to "Noto Sans Regular" files. cpSync
+      // rewrites them as absolute links into this temp dir, deleted below, and Node 22 ignores its
+      // `dereference` inside a directory; copyFileSync copies the linked bytes. Stacks are flat folders.
+      const to = join(outDir, 'fonts', stack);
+      mkdirSync(to, { recursive: true });
+      for (const file of readdirSync(from)) copyFileSync(join(from, file), join(to, file));
     }
     cpSync(join(source, 'fonts', 'OFL.txt'), join(outDir, 'fonts', 'OFL.txt'));
 
@@ -153,6 +160,18 @@ async function copyAssets(outDir: string): Promise<void> {
   }
 }
 
+/** Every font stack and sprite file is a regular file: a link (dangling, or one S3 cannot hold) is not. */
+function assetsComplete(outDir: string): boolean {
+  const fontFiles = BASEMAP_FONT_STACKS.flatMap((stack) => {
+    const dir = join(outDir, 'fonts', stack);
+    return existsSync(dir) ? readdirSync(dir).map((file) => join(dir, file)) : [dir];
+  });
+  const spriteFiles = SPRITE_FILES.map((file) => join(outDir, 'sprites', 'v4', file));
+  return [...fontFiles, ...spriteFiles].every(
+    (file) => lstatSync(file, { throwIfNoEntry: false })?.isFile() ?? false,
+  );
+}
+
 async function main(): Promise<void> {
   const { values } = parseArgs({
     options: { build: { type: 'string' }, force: { type: 'boolean', default: false } },
@@ -161,7 +180,18 @@ async function main(): Promise<void> {
     fail('--build takes a date as YYYYMMDD');
   const archivePath = join(OUT_DIR, ARCHIVE);
   if (existsSync(join(OUT_DIR, 'SOURCE.json')) && existsSync(archivePath) && !values.force) {
-    console.log(`basemap/ already has ${ARCHIVE} and SOURCE.json; pass --force to rebuild.`);
+    if (assetsComplete(OUT_DIR)) {
+      console.log(`basemap/ already has ${ARCHIVE} and SOURCE.json; pass --force to rebuild.`);
+      return;
+    }
+    // Same pinned assets commit, so SOURCE.json and the archive stay as they are.
+    console.log(
+      `basemap/ has ${ARCHIVE}, but its glyphs or sprites are incomplete; copying them again.`,
+    );
+    await copyAssets(OUT_DIR);
+    if (!assetsComplete(OUT_DIR))
+      fail('the glyphs and sprites are still incomplete after the copy');
+    console.log('basemap/ glyphs and sprites are complete.');
     return;
   }
 
