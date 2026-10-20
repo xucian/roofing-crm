@@ -15,6 +15,7 @@ import { PropertyDrawer } from '../details/PropertyDrawer';
 import { useOpenProperty } from '../details/use-open-property';
 import { usePropertyDetail } from '../details/use-property-detail';
 import { LeadsPage } from '../leads/LeadsPage';
+import { EMPTY_LEAD_FILTER, toLeadFilter, type LeadFilterDraft } from '../leads/lead-filter';
 import { useLeads } from '../leads/use-leads';
 import { loadWorkspace } from '../leads/workspace';
 import { Legend } from '../map/Legend';
@@ -64,7 +65,14 @@ export function App({ config }: { config: RuntimeConfig }) {
     [],
   );
   const [workspace] = useState(loadWorkspace);
-  const leads = useLeads(crm, workspace);
+  // The Leads page's filters live here, so they survive a visit to the map; the radius filter is
+  // around the map's pin. The list is filtered only while the Leads page shows.
+  const [leadFilter, setLeadFilter] = useState<LeadFilterDraft>(EMPTY_LEAD_FILTER);
+  const activeLeadFilter = useMemo(
+    () => toLeadFilter(leadFilter, search.center, search.radiusMiles),
+    [leadFilter, search.center, search.radiusMiles],
+  );
+  const leads = useLeads(crm, workspace, route === 'leads' ? activeLeadFilter : null);
 
   // A GPS fix inside the map's box but outside the county: the server's area_note says so, and the
   // search goes back to the center it had (docs/decisions.md §4, 2026-10-17).
@@ -231,7 +239,17 @@ export function App({ config }: { config: RuntimeConfig }) {
       </main>
       {route === 'leads' ? (
         <div className="leads-pane">
-          <LeadsPage leads={leads} onShowOnMap={showOnMap} />
+          <LeadsPage
+            leads={leads}
+            filters={{
+              draft: leadFilter,
+              onChange: setLeadFilter,
+              active: activeLeadFilter,
+              center: search.center,
+              mapRadiusMiles: search.radiusMiles,
+            }}
+            onShowOnMap={showOnMap}
+          />
         </div>
       ) : null}
       <Footer config={config} meta={meta} />

@@ -16,13 +16,32 @@ import {
   stubPipelineFetch,
   type PipelineRoute,
 } from '../test/helpers';
-import { LeadRowFailure, createLeadService } from './service';
+import { LeadNotFound, LeadRowFailure, createLeadService, describeFilter } from './service';
 
 const BASE = 'https://pipeline.example.org';
 const NOW = new Date('2026-10-20T12:00:00.000Z');
 const quiet = { info: () => undefined, warn: () => undefined };
 
-function setup(routes: Record<string, PipelineRoute>, remainingMs = 25_000) {
+interface LogLine {
+  message: string;
+  fields: Record<string, unknown>;
+}
+
+/** A logger that keeps its lines, to check what a log line says and does not say. */
+function recordingLogger(): { lines: LogLine[]; info: Logged; warn: Logged } {
+  const lines: LogLine[] = [];
+  const log: Logged = (message, ...extra) => {
+    lines.push({ message: String(message), fields: (extra[0] ?? {}) as Record<string, unknown> });
+  };
+  return { lines, info: log, warn: log };
+}
+type Logged = (message: unknown, ...extra: unknown[]) => void;
+
+function setup(
+  routes: Record<string, PipelineRoute>,
+  remainingMs = 25_000,
+  logger: { info: Logged; warn: Logged } = quiet,
+) {
   const repository = new MemoryRepository();
   const metrics = new RequestMetrics();
   const deadline = fakeDeadline(remainingMs);
@@ -41,7 +60,7 @@ function setup(routes: Record<string, PipelineRoute>, remainingMs = 25_000) {
     pipeline,
     deadline,
     metrics,
-    logger: quiet,
+    logger,
     now: () => NOW,
     newId: () => `01JBQ8000000000000000000${String(n++).padStart(2, '0')}`,
   });
@@ -271,5 +290,152 @@ describe('leads.createMany', () => {
     ]);
     // One fast 5xx is retried once by the transport; the second row reuses the failure.
     expect(calls).toEqual(['/v1/meta', '/v1/meta']);
+  });
+});
+
+describe('managing leads (F4)', () => {
+  const LATER = '2026-10-20T12:00:00.000Z';
+
+  async function withLeads(logger = recordingLogger()) {
+    const context = setup(
+      {
+        '/v1/meta': META,
+        '/v1/properties/fx-1': () => ({ body: fixtureDetail(1) }),
+        '/v1/properties/fx-2': () => ({ body: fixtureDetail(2, { permits: [] }) }),
+      },
+      25_000,
+      logger,
+    );
+    await context.service.createMany({
+      workspace_id: WORKSPACE,
+      rows: [
+        { property_id: 'fx-1', permit_id: '' },
+        { property_id: 'fx-2', permit_id: '' },
+      ],
+    });
+    logger.lines.length = 0;
+    return { ...context, logger };
+  }
+
+  it('sets the status and the note, keeps the snapshot, and logs no note', async () => {
+    const { service, repository, metrics, logger } = await withLeads();
+    const before = await repository.get(WORKSPACE, 'fx-1#');
+    const { lead } = await service.update({
+      workspace_id: WORKSPACE,
+      property_id: 'fx-1',
+      permit_id: '',
+      status: 'working',
+      note: 'Owner asked for a quote in spring.',
+    });
+    expect(lead).toEqual({
+      ...before,
+      status: 'working',
+      note: 'Owner asked for a quote in spring.',
+      updated_at: LATER,
+    });
+    expect(LeadSchema.parse(lead)).toEqual(lead);
+    expect(metrics.snapshot()).toMatchObject({ 'LeadProcessed operation=update': [1] });
+    expect(logger.lines).toEqual([
+      {
+        message: 'lead updated',
+        fields: expect.objectContaining({
+          property_id: 'fx-1',
+          fields: ['status', 'note'],
+          status: 'working',
+          note_length: 34,
+        }) as Record<string, unknown>,
+      },
+    ]);
+    expect(JSON.stringify(logger.lines)).not.toContain('quote');
+  });
+
+  it('changes only the field given', async () => {
+    const { service } = await withLeads();
+    await service.update({
+      workspace_id: WORKSPACE,
+      property_id: 'fx-1',
+      permit_id: '',
+      note: 'x',
+    });
+    const { lead } = await service.update({
+      workspace_id: WORKSPACE,
+      property_id: 'fx-1',
+      permit_id: '',
+      status: 'closed',
+    });
+    expect(lead).toMatchObject({ status: 'closed', note: 'x' });
+  });
+
+  it('refuses to edit a lead the workspace does not have, writing nothing', async () => {
+    const { service, repository } = await withLeads();
+    const writes = repository.writes;
+    await expect(
+      service.update({
+        workspace_id: WORKSPACE,
+        property_id: 'fx-9',
+        permit_id: '',
+        status: 'closed',
+      }),
+    ).rejects.toBeInstanceOf(LeadNotFound);
+    await expect(
+      service.update({
+        workspace_id: '01JBQ7Z0000000000000000009',
+        property_id: 'fx-1',
+        permit_id: '',
+        note: 'x',
+      }),
+    ).rejects.toBeInstanceOf(LeadNotFound);
+    expect(repository.writes).toBe(writes);
+  });
+
+  it('deletes a lead once; deleting it again answers missing', async () => {
+    const { service, repository, metrics, logger } = await withLeads();
+    const ref = { workspace_id: WORKSPACE, property_id: 'fx-2', permit_id: '' };
+    await expect(service.delete(ref)).resolves.toEqual({ outcome: 'deleted' });
+    await expect(service.delete(ref)).resolves.toEqual({ outcome: 'missing' });
+    await expect(repository.get(WORKSPACE, 'fx-2#')).resolves.toBeNull();
+    await expect(repository.get(WORKSPACE, 'fx-1#')).resolves.not.toBeNull();
+    expect(logger.lines.map((line) => [line.message, line.fields.outcome])).toEqual([
+      ['lead deleted', 'deleted'],
+      ['lead not deleted', 'missing'],
+    ]);
+    expect(metrics.snapshot()).toMatchObject({ 'LeadProcessed operation=delete': [2] });
+  });
+
+  it('lists the leads the filter keeps, and logs the filter without its point', async () => {
+    const { service, logger } = await withLeads();
+    // fx-2 has no permit in its fixture detail, so only fx-1 has an open one.
+    const page = await service.list({
+      workspace_id: WORKSPACE,
+      limit: 100,
+      filter: {
+        permit_groups: ['open'],
+        within: { lat: 30.25, lon: -97.75, radius_miles: 5 },
+      },
+    });
+    expect(page.items.map((lead) => lead.property_id)).toEqual(['fx-1']);
+    expect(page.next_cursor).toBeNull();
+    expect(logger.lines).toEqual([
+      {
+        message: 'leads listed',
+        fields: {
+          filter: { permit_groups: ['open'], within_miles: 5 },
+          returned: 1,
+          scanned: 2,
+          has_more: false,
+        },
+      },
+    ]);
+    expect(JSON.stringify(logger.lines)).not.toContain('97.75');
+
+    const none = await service.list({
+      workspace_id: WORKSPACE,
+      limit: 100,
+      filter: { statuses: [] },
+    });
+    expect(none.items).toEqual([]);
+    const all = await service.list({ workspace_id: WORKSPACE, limit: 100 });
+    expect(all.items).toHaveLength(2);
+    expect(describeFilter(undefined)).toBeNull();
   });
 });

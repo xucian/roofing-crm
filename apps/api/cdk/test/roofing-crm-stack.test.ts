@@ -1,7 +1,7 @@
 import { runInNewContext } from 'node:vm';
 import { Annotations, Match } from 'aws-cdk-lib/assertions';
 import { afterAll, describe, expect, it } from 'vitest';
-import { THROTTLES } from '../lib/leads-api';
+import { LEADS_RESERVED_CONCURRENCY, THROTTLES } from '../lib/leads-api';
 import { SPA_ROUTING_FUNCTION, runtimeConfig } from '../lib/web-hosting';
 import { API_BASE, cleanupFixtures, synth } from './fixtures';
 
@@ -160,7 +160,7 @@ describe('RoofingCrm stack', () => {
   });
 });
 
-describe('the CRM API (F3)', () => {
+describe('the CRM API (F3, F4)', () => {
   it('keeps leads in an on-demand table keyed by workspace and lead, with point-in-time recovery', () => {
     const { template } = synth();
     template.resourceCountIs('AWS::DynamoDB::Table', 1);
@@ -177,7 +177,7 @@ describe('the CRM API (F3)', () => {
     });
   });
 
-  it('runs one traced leads function on Node 22, 29 s, without reserved concurrency', () => {
+  it('runs one traced leads function on Node 22, 29 s, with its own reserved concurrency', () => {
     const { template } = synth();
     const functions = template.findResources('AWS::Lambda::Function', {
       Properties: { Handler: 'index.handler' },
@@ -193,7 +193,7 @@ describe('the CRM API (F3)', () => {
       Timeout: 29,
       MemorySize: 1024,
       TracingConfig: { Mode: 'Active' },
-      ReservedConcurrentExecutions: Match.absent(),
+      ReservedConcurrentExecutions: LEADS_RESERVED_CONCURRENCY,
       Environment: {
         Variables: Match.objectLike({
           PIPELINE_API_BASE: API_BASE,
@@ -207,19 +207,29 @@ describe('the CRM API (F3)', () => {
 
   it('lets the function read and write only the leads table', () => {
     const { template } = synth();
-    template.hasResourceProperties('AWS::IAM::Policy', {
-      PolicyDocument: {
-        Statement: Match.arrayWith([
-          Match.objectLike({
-            Action: ['dynamodb:GetItem', 'dynamodb:PutItem', 'dynamodb:Query'],
-            Effect: 'Allow',
-          }),
-        ]),
-      },
-    });
-    expect(JSON.stringify(template.findResources('AWS::IAM::Policy'))).not.toContain(
-      'dynamodb:DeleteItem',
+    const statements = Object.values(template.findResources('AWS::IAM::Policy')).flatMap(
+      (policy) =>
+        (
+          policy as {
+            Properties: { PolicyDocument: { Statement: { Action: string | string[] }[] } };
+          }
+        ).Properties.PolicyDocument.Statement,
     );
+    const table = statements.filter((statement) =>
+      [statement.Action].flat().some((action) => action.startsWith('dynamodb:')),
+    );
+    expect(table).toHaveLength(1);
+    expect([table[0]?.Action].flat().sort()).toEqual([
+      'dynamodb:DeleteItem',
+      'dynamodb:GetItem',
+      'dynamodb:PutItem',
+      'dynamodb:Query',
+      'dynamodb:UpdateItem',
+    ]);
+    const policies = JSON.stringify(template.findResources('AWS::IAM::Policy'));
+    for (const action of ['dynamodb:Scan', 'dynamodb:BatchWriteItem', 'dynamodb:*']) {
+      expect(policies).not.toContain(`"${action}"`);
+    }
   });
 
   it('routes each mutation on its own throttled route and queries through one GET catch-all', () => {
@@ -231,6 +241,8 @@ describe('the CRM API (F3)', () => {
       'GET /api/trpc/{proxy+}',
       'POST /api/trpc/leads.create',
       'POST /api/trpc/leads.createMany',
+      'POST /api/trpc/leads.delete',
+      'POST /api/trpc/leads.update',
     ]);
     template.hasResourceProperties('AWS::ApiGatewayV2::Stage', {
       StageName: '$default',
@@ -242,6 +254,8 @@ describe('the CRM API (F3)', () => {
       RouteSettings: {
         'POST /api/trpc/leads.create': { ThrottlingRateLimit: 2, ThrottlingBurstLimit: 5 },
         'POST /api/trpc/leads.createMany': { ThrottlingRateLimit: 0.5, ThrottlingBurstLimit: 2 },
+        'POST /api/trpc/leads.update': { ThrottlingRateLimit: 2, ThrottlingBurstLimit: 5 },
+        'POST /api/trpc/leads.delete': { ThrottlingRateLimit: 2, ThrottlingBurstLimit: 5 },
       },
       AccessLogSettings: { Format: Match.stringLikeRegexp('\\$context.requestId') },
     });
@@ -300,6 +314,10 @@ describe('the CRM API (F3)', () => {
         }),
       ]),
     });
+    const alarms = JSON.stringify(template.findResources('AWS::CloudWatch::Alarm'));
+    for (const operation of ['GetItem', 'PutItem', 'Query', 'UpdateItem', 'DeleteItem']) {
+      expect(alarms).toContain(`{"Name":"Operation","Value":"${operation}"}`);
+    }
     template.resourceCountIs('AWS::SNS::Subscription', 0);
   });
 

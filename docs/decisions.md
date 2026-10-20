@@ -585,3 +585,87 @@ reload. It adds the stack's first API, table and alarms. Where this entry differ
   - Item 21's DynamoDB Local integration test: there is no container runtime on the builder's machine. The repository
     is tested with `aws-sdk-client-mock`. The whole handler was also run locally against the live pipeline, with an
     in-memory table.
+
+## 2026-10-20 — Pipeline T9 letter; the account's Lambda limit is 1,000
+
+The pipeline's letter of 2026-10-20 reports its chat route live (`POST /v1/agent/chat`, Bedrock Sonnet 4.6), with the
+contract (`7d8ece68…`) and the GET routes unchanged. For the CRM:
+
+- **Concurrency.** The pipeline now reserves 5 executions for its chat route, so the account's increase has landed.
+  The agent read it on 2026-10-20 (`aws lambda get-account-settings`, read-only): limit 1,000, unreserved 995. The
+  2026-10-20 account entry deferred the CRM's reservations until then. F4 gives the `leads` function its own
+  (F4 entry below), and F5 gives the `agent` function one.
+- **Bedrock.** The pipeline's chat runs on Bedrock in this account, so the 2026-10-16 block is gone. F5 still confirms
+  the Sonnet inference profile `BEDROCK_MODEL_ID` names before it relies on it.
+- **No change for F4.** The CRM's agent (F5) calls the pipeline's GET routes as tools and never its chat, so the chat
+  route's limits (0.4 requests/s, burst 5; 200 calls or 5M tokens per UTC day) do not bind it. The new CORS preflight
+  answers do not matter either: the browser sends the pipeline plain GETs. The pipeline's measured turn time (7–11 s
+  warm, 10–12.5 s cold, 25 s server deadline) is a reference for F5's own 25 s budget.
+
+## 2026-10-20 — F4 built: manage leads
+
+F3 was verified on the public URL on 2026-10-20 (`docs/progress.md`). F4 is the managing half of README AC 8 and the
+demo step "filtering leads by roof age, permit status/open duration, and location radius" (§5). It adds two routes, two
+table permissions and a reserved concurrency; nothing new reads the pipeline. Where this entry differs from earlier
+text, this entry wins.
+
+- **`leads.update`.** It sets the status, the note, or both (at least one is required), plus `updated_at`. The snapshot
+  and the keys never change. The update is conditional on the lead existing, so editing a deleted lead writes nothing
+  and answers `NOT_FOUND`. Last write wins: a workspace is one browser, so there is no version check.
+- **`leads.delete`.** It deletes and answers `deleted`, or `missing` when the lead is gone already. That is an answer,
+  not an error, so a retried delete is harmless.
+- **Routes.** Each mutation has its own POST route: `leads.update` and `leads.delete` allow 2 requests/s with a burst
+  of 5, as `leads.create` does. The function may also UpdateItem and DeleteItem, and the `TableSystemErrors` alarm
+  covers both operations.
+- **Filters** (§5). `leads.list` takes an optional `filter`. Every field is optional, and a field left out does not
+  filter.
+  - `statuses`.
+  - `roof_age_min`: strict, `roof_age_years > n`, as on the map.
+  - `permit_groups`: the snapshot permit's status group, or `none` for a lead without one.
+  - `open_years_min`: `open_duration_days >= n × 365`, the contract's `long_open_years` rule, open or stalled.
+  - `within`: great-circle miles around a point, inside the map's radius bounds; the browser sends the map's pin.
+
+  An empty list matches no lead. The filters read the snapshot, so a lead matches as it was when saved; the page says
+  so. One predicate, `matchesLeadFilter` in `packages/shared`, decides. The `leads` function applies it, as the
+  metagross entry decided. The browser uses it only to mark an edited lead the filters no longer keep, and F5's
+  `list_leads` can reuse it.
+- **Filtered paging.** The function filters in code, not with a DynamoDB `FilterExpression`. The reads cost the same,
+  and the browser's predicate stays the one the server uses.
+  - A page reads Query pages until it holds `limit` matches.
+  - One request reads at most 2,000 leads; past that it answers with a cursor.
+  - The cursor is the stored sort key of the last lead read.
+- **Reserved concurrency.** The `leads` function reserves 10 executions (§3, metagross item 9; letter entry above).
+  That covers the route throttles' worst case: two 25 s `createMany` calls plus creates, edits and lists. It is also
+  the bulkhead that keeps F5's chat from starving lead writes. `FunctionThrottles` now means the function hit its
+  reservation.
+- **Logs and metrics** (items 15, 16).
+  - "leads listed" logs the filter's fields, `returned`, `scanned` and `has_more`. The radius's point is left out,
+    since it may be a GPS fix.
+  - "lead updated" logs the fields changed, the new status and the note's length, never the note.
+  - Deletes log "lead deleted", or "lead not deleted" with outcome `missing`.
+  - `LeadProcessed` gains `operation` = `update` and `delete`; `ProcessingDuration` gains both operations.
+- **Browser.**
+  - **Editing a card.** The status is a select that saves on change. "Add a note" or "Edit note" opens a text area
+    (at most 2,000 characters) with Save and Cancel.
+  - **Deleting.** "Delete…" asks "Delete this lead and its note?" with Delete and Keep. Each action shows its outcome
+    with the CRM request id. A delete is reported above the list, since its card is gone, and the map's row offers
+    "Save lead" again.
+  - **Queues.** Edits and deletes run one at a time in their own queue, so a 25-row save does not hold them up.
+  - **A lead deleted elsewhere.** When an edit finds the lead gone (another tab), the card leaves the list and the
+    page says why. `@roofing-crm/api-client` now carries the tRPC `code`, so only the function's own `NOT_FOUND`
+    drops a card, never API Gateway's 404 for a missing route.
+- **Filter bar.**
+  - **Fields.** Status and Permit tick boxes (all ticked filters nothing), "Roof older than" and "Permit open at least"
+    in years (empty filters nothing), and "Near the map's pin" with miles. The miles default to the map's radius.
+  - **State.** The filters live in the app, so they survive a visit to the map. The list is filtered only while the
+    Leads page shows.
+  - **Reads.** A change reads the list again after 300 ms. The previous answer stays, dimmed, until the next one
+    arrives.
+  - **Summary.** The page shows "N of M leads match the filters" with the read's request id. An edited lead that no
+    longer matches stays, marked, until the filters change.
+- **Tests.** The shared predicate is tested at every field's boundary, and the repository's update, delete and paging
+  with `aws-sdk-client-mock`. Service and handler tests cover the routes end to end, the log lines included, and the
+  stack tests the routes, throttles, grants, alarm and reservation. App tests cover editing, delete with its
+  confirmation, each filter through the function's call, an edited lead the filters no longer keep, and a lead
+  deleted elsewhere.
+- **Not done, both extras.** The filters are not in the URL, so a reload clears them. The order stays newest first.

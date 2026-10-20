@@ -1,11 +1,13 @@
 import {
   CreateLeadInputSchema,
   CreateManyLeadsInputSchema,
+  DeleteLeadInputSchema,
   ListLeadsInputSchema,
+  UpdateLeadInputSchema,
 } from '@roofing-crm/shared';
 import { TRPCError } from '@trpc/server';
 import { InvalidCursor } from '../leads/repository';
-import { LeadRowFailure } from '../leads/service';
+import { LeadNotFound, LeadRowFailure } from '../leads/service';
 import { publicProcedure, router } from '../trpc';
 
 const ROW_FAILURE_CODES = {
@@ -16,9 +18,9 @@ const ROW_FAILURE_CODES = {
 } as const;
 
 /**
- * Lead procedures (F3: the creating half of README AC 8). Each mutation has its own HTTP API route
- * and throttle (metagross item 4); the inputs are the shared Zod schemas. Every answer carries the
- * request id that finds it in the function's logs (`request_id`), as every error does.
+ * Lead procedures (README AC 8: creating in F3, managing in F4). Each mutation has its own HTTP API
+ * route and throttle (metagross item 4); the inputs are the shared Zod schemas. Every answer carries
+ * the request id that finds it in the function's logs (`request_id`), as every error does.
  */
 export const leadsRouter = router({
   /** Saves one property or permit as a lead; saving it again returns the existing lead. */
@@ -45,7 +47,25 @@ export const leadsRouter = router({
       request_id: ctx.requestId,
     })),
 
-  /** The workspace's leads, by property and permit id, a page at a time. */
+  /** Sets a lead's status, note or both; NOT_FOUND when the workspace has no such lead. */
+  update: publicProcedure.input(UpdateLeadInputSchema).mutation(async ({ ctx, input }) => {
+    try {
+      return { ...(await ctx.leads.update(input)), request_id: ctx.requestId };
+    } catch (error) {
+      if (error instanceof LeadNotFound) {
+        throw new TRPCError({ code: 'NOT_FOUND', message: error.message, cause: error });
+      }
+      throw error;
+    }
+  }),
+
+  /** Deletes a lead; deleting one that is gone already answers `missing`, not an error. */
+  delete: publicProcedure.input(DeleteLeadInputSchema).mutation(async ({ ctx, input }) => ({
+    ...(await ctx.leads.delete(input)),
+    request_id: ctx.requestId,
+  })),
+
+  /** The workspace's leads, by property and permit id, a page at a time; `filter` narrows them. */
   list: publicProcedure.input(ListLeadsInputSchema).query(async ({ ctx, input }) => {
     try {
       return { ...(await ctx.leads.list(input)), request_id: ctx.requestId };

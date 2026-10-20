@@ -9,8 +9,11 @@ import {
   leadKey,
   type Lead,
   type LeadFailure,
+  type LeadFilter,
+  type LeadStatus,
 } from '@roofing-crm/shared';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { formatLeadAddress } from './format-lead';
 import type { Workspace } from './workspace';
 
 /** A row to save: a property, or one of its permits. */
@@ -28,6 +31,42 @@ export type LeadsView =
   | { status: 'loading' }
   | { status: 'ready'; leads: Lead[]; requestId: string | null; truncated: boolean }
   | { status: 'failed'; error: CrmApiFailure };
+
+/** The leads `leads.list` returned for the Leads page's filters; `off` without filters. */
+export type FilteredLeadsView =
+  | { status: 'off' }
+  | { status: 'loading'; previous: Lead[] | null }
+  | {
+      status: 'ready';
+      leads: Lead[];
+      filter: LeadFilter;
+      requestId: string | null;
+      truncated: boolean;
+    }
+  | { status: 'failed'; error: CrmApiFailure };
+
+interface FilterAnswer {
+  key: string;
+  attempt: number;
+  view: Extract<FilteredLeadsView, { status: 'ready' | 'failed' }>;
+}
+
+/** Wait this long after the last change to a filter before reading the list. */
+export const FILTER_DEBOUNCE_MS = 300;
+
+/** How an edit or a delete went, for the lead's card. */
+export type EditOutcome = { ok: true; requestId: string } | { ok: false; error: CrmApiFailure };
+
+export interface LeadPatch {
+  status?: LeadStatus;
+  note?: string;
+}
+
+/** A change the page reports above the list, since its card is gone: a delete. */
+export interface LeadsNotice {
+  text: string;
+  requestId: string | null;
+}
 
 export interface SaveReport {
   /** Increases with every save, so the panel can tell reports apart. */
@@ -54,6 +93,14 @@ export interface LeadsStore {
   save: (targets: LeadTarget[]) => void;
   dismissSave: () => void;
   reload: () => void;
+  /** The filtered list, when the page asked for one. */
+  filtered: FilteredLeadsView;
+  reloadFiltered: () => void;
+  /** Sets a lead's status or note; edits run one after another, in the order made. */
+  update: (lead: Lead, patch: LeadPatch) => Promise<EditOutcome>;
+  remove: (lead: Lead) => Promise<EditOutcome>;
+  notice: LeadsNotice | null;
+  dismissNotice: () => void;
 }
 
 const byNewest = (a: Lead, b: Lead): number =>
@@ -71,47 +118,63 @@ function merge(leads: Lead[], added: Lead[]): Lead[] {
   return [...known.values()].sort(byNewest);
 }
 
+/** Every lead of the workspace that the filter keeps, newest first, up to MAX_LIST_PAGES pages. */
+async function readLeads(
+  client: CrmApiClient,
+  workspaceId: string,
+  filter: LeadFilter | null,
+): Promise<{ leads: Lead[]; requestId: string | null; truncated: boolean }> {
+  const leads: Lead[] = [];
+  let cursor: string | null = null;
+  let requestId: string | null = null;
+  for (let page = 0; page < MAX_LIST_PAGES; page += 1) {
+    const answer = await client.leads.list.query({
+      workspace_id: workspaceId,
+      cursor,
+      limit: LEAD_LIST_PAGE.max,
+      ...(filter ? { filter } : {}),
+    });
+    leads.push(...answer.items);
+    requestId = answer.request_id;
+    cursor = answer.next_cursor;
+    if (cursor === null) break;
+  }
+  return { leads: merge([], leads), requestId, truncated: cursor !== null };
+}
+
 /**
- * The workspace's leads (README AC 8, creating): read from the CRM API when the page opens, so they
- * survive a reload, and saved one or many at a time. Saves run one after another, as the pipeline's
- * account needs (one pipeline call at a time), and each reports its rows as created, already saved
- * or failed.
+ * The workspace's leads (README AC 8): read from the CRM API when the page opens, so they survive a
+ * reload; saved one or many at a time; edited, deleted and filtered on the Leads page. Saves run one
+ * after another, as the pipeline's account needs (one pipeline call at a time), and each reports its
+ * rows as created, already saved or failed. Edits and deletes have their own queue, so a long save
+ * does not hold them up. The filter is applied by the `leads` function (`leads.list`); an edit or a
+ * delete updates both the whole list and the filtered one.
  */
-export function useLeads(client: CrmApiClient, workspace: Workspace): LeadsStore {
+export function useLeads(
+  client: CrmApiClient,
+  workspace: Workspace,
+  filter: LeadFilter | null = null,
+): LeadsStore {
   const [view, setView] = useState<LeadsView>({ status: 'loading' });
+  const [answer, setAnswer] = useState<FilterAnswer | null>(null);
   const [saving, setSaving] = useState<ReadonlySet<string>>(new Set());
   const [lastSave, setLastSave] = useState<SaveReport | null>(null);
+  const [notice, setNotice] = useState<LeadsNotice | null>(null);
   const [attempt, setAttempt] = useState(0);
+  const [filterAttempt, setFilterAttempt] = useState(0);
   const queue = useRef<Promise<void>>(Promise.resolve());
+  const edits = useRef<Promise<unknown>>(Promise.resolve());
   const reports = useRef(0);
+  // The filter's identity changes on every render of the page; its JSON does not.
+  const filterKey = filter === null ? null : JSON.stringify(filter);
 
   useEffect(() => {
     let cancelled = false;
     const load = async (): Promise<void> => {
       setView({ status: 'loading' });
-      const leads: Lead[] = [];
-      let cursor: string | null = null;
-      let requestId: string | null = null;
       try {
-        for (let page = 0; page < MAX_LIST_PAGES; page += 1) {
-          const answer = await client.leads.list.query({
-            workspace_id: workspace.id,
-            cursor,
-            limit: LEAD_LIST_PAGE.max,
-          });
-          leads.push(...answer.items);
-          requestId = answer.request_id;
-          cursor = answer.next_cursor;
-          if (cursor === null) break;
-        }
-        if (!cancelled) {
-          setView({
-            status: 'ready',
-            leads: merge([], leads),
-            requestId,
-            truncated: cursor !== null,
-          });
-        }
+        const read = await readLeads(client, workspace.id, null);
+        if (!cancelled) setView({ status: 'ready', ...read });
       } catch (error) {
         if (!cancelled) setView({ status: 'failed', error: describeCrmApiError(error) });
       }
@@ -121,6 +184,116 @@ export function useLeads(client: CrmApiClient, workspace: Workspace): LeadsStore
       cancelled = true;
     };
   }, [client, workspace.id, attempt]);
+
+  // The filtered read's answer, for the filter key and attempt it was read for. "Off" and
+  // "loading" follow from the current key, so the effect never sets state before it reads.
+  useEffect(() => {
+    if (filterKey === null) return;
+    const active = JSON.parse(filterKey) as LeadFilter;
+    const read = { key: filterKey, attempt: filterAttempt };
+    let cancelled = false;
+    const timer = setTimeout(() => {
+      readLeads(client, workspace.id, active).then(
+        (answer) => {
+          if (!cancelled)
+            setAnswer({ ...read, view: { status: 'ready', filter: active, ...answer } });
+        },
+        (error: unknown) => {
+          if (!cancelled) {
+            setAnswer({ ...read, view: { status: 'failed', error: describeCrmApiError(error) } });
+          }
+        },
+      );
+    }, FILTER_DEBOUNCE_MS);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [client, workspace.id, filterKey, filterAttempt]);
+
+  // The previous answer stays on the page while the next one loads.
+  const filtered: FilteredLeadsView =
+    filterKey === null
+      ? { status: 'off' }
+      : answer?.key === filterKey && answer.attempt === filterAttempt
+        ? answer.view
+        : {
+            status: 'loading',
+            previous: answer?.view.status === 'ready' ? answer.view.leads : null,
+          };
+
+  /** Applies a change to every list on the page: the whole one and the filtered one. */
+  const patchLists = useCallback((change: (leads: Lead[]) => Lead[]): void => {
+    setView((current) =>
+      current.status === 'ready' ? { ...current, leads: change(current.leads) } : current,
+    );
+    setAnswer((current) =>
+      current?.view.status === 'ready'
+        ? { ...current, view: { ...current.view, leads: change(current.view.leads) } }
+        : current,
+    );
+  }, []);
+
+  const enqueueEdit = useCallback((task: () => Promise<EditOutcome>): Promise<EditOutcome> => {
+    const result = edits.current.then(task);
+    edits.current = result.catch(() => undefined);
+    return result;
+  }, []);
+
+  const update = useCallback(
+    (lead: Lead, patch: LeadPatch): Promise<EditOutcome> =>
+      enqueueEdit(async () => {
+        const key = leadKey(lead);
+        try {
+          const answer = await client.leads.update.mutate({
+            workspace_id: workspace.id,
+            property_id: lead.property_id,
+            permit_id: lead.permit_id,
+            ...patch,
+          });
+          patchLists((leads) => leads.map((item) => (leadKey(item) === key ? answer.lead : item)));
+          return { ok: true, requestId: answer.request_id };
+        } catch (error) {
+          const failure = describeCrmApiError(error);
+          // The function's own NOT_FOUND: the lead was deleted elsewhere, e.g. in another tab.
+          if (failure.code === 'NOT_FOUND') {
+            patchLists((leads) => leads.filter((item) => leadKey(item) !== key));
+            setNotice({
+              text: `The lead for ${formatLeadAddress(lead)} was deleted elsewhere, so it has left the list.`,
+              requestId: failure.requestId,
+            });
+          }
+          return { ok: false, error: failure };
+        }
+      }),
+    [client, workspace.id, enqueueEdit, patchLists],
+  );
+
+  const remove = useCallback(
+    (lead: Lead): Promise<EditOutcome> =>
+      enqueueEdit(async () => {
+        const key = leadKey(lead);
+        try {
+          const answer = await client.leads.delete.mutate({
+            workspace_id: workspace.id,
+            property_id: lead.property_id,
+            permit_id: lead.permit_id,
+          });
+          patchLists((leads) => leads.filter((item) => leadKey(item) !== key));
+          setNotice({
+            text:
+              answer.outcome === 'deleted'
+                ? `Deleted the lead for ${formatLeadAddress(lead)}.`
+                : `The lead for ${formatLeadAddress(lead)} was deleted already.`,
+            requestId: answer.request_id,
+          });
+          return { ok: true, requestId: answer.request_id };
+        } catch (error) {
+          return { ok: false, error: describeCrmApiError(error) };
+        }
+      }),
+    [client, workspace.id, enqueueEdit, patchLists],
+  );
 
   const savedKeys = useMemo(
     () => new Set(view.status === 'ready' ? view.leads.map((lead) => leadKey(lead)) : []),
@@ -219,6 +392,16 @@ export function useLeads(client: CrmApiClient, workspace: Workspace): LeadsStore
     },
     reload: () => {
       setAttempt((n) => n + 1);
+    },
+    filtered,
+    reloadFiltered: () => {
+      setFilterAttempt((n) => n + 1);
+    },
+    update,
+    remove,
+    notice,
+    dismissNotice: () => {
+      setNotice(null);
     },
   };
 }

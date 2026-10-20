@@ -37,6 +37,8 @@ export interface CrmApiFailure {
   message: string;
   /** HTTP status, when a response arrived. */
   status: number | null;
+  /** The function's tRPC code (`NOT_FOUND`, …); null when the function did not answer. */
+  code: string | null;
   /** The CRM request id (API Gateway's), which finds the call in the `leads` function's logs. */
   requestId: string | null;
   /** Why a lead could not be saved, with the pipeline's request id, when that was the cause. */
@@ -44,6 +46,7 @@ export interface CrmApiFailure {
 }
 
 interface ErrorShapeData {
+  code?: string;
   httpStatus?: number;
   requestId?: string | null;
   failure?: LeadFailure | null;
@@ -66,11 +69,12 @@ export function describeCrmApiError(error: unknown): CrmApiFailure {
             ? 'The CRM API could not be reached.'
             : `The CRM API failed (HTTP ${String(status)}).`
         : error.message;
-    return { message, status, requestId, failure: data?.failure ?? null };
+    return { message, status, code: data?.code ?? null, requestId, failure: data?.failure ?? null };
   }
   return {
     message: error instanceof Error ? error.message : String(error),
     status: null,
+    code: null,
     requestId: null,
     failure: null,
   };

@@ -10,11 +10,11 @@ request: a 25-row save writes a few records, not one per row.
 
 | Metric | Unit | Dimensions | Emitted | Alarm |
 | --- | --- | --- | --- | --- |
-| `LeadProcessed` | Count | `operation` = `create` | Per row saved or found already saved, by `leads.create` and `leads.createMany` | — |
+| `LeadProcessed` | Count | `operation` = `create`, `update` or `delete` | `create`: per row saved or found already saved, by `leads.create` and `leads.createMany`. `update`: per lead edited. `delete`: per delete, including one that found the lead gone | — |
 | `LeadFailed` | Count | `operation` = `create`, `reason` = `not_found`, `mismatch`, `pipeline` or `deadline` | Per row not saved | — (a pipeline outage is caught below) |
 | `PipelineCallProcessed` | Count | — | Per pipeline call that answered 2xx | — |
 | `PipelineCallFailed` | Count | `status` = `429`, `4xx`, `5xx`, `timeout`, `network` or `aborted` | Per pipeline call that failed, after its retries | `PipelineOutage`: `5xx` + `timeout` ≥ 5 in 5 minutes |
-| `ProcessingDuration` | Milliseconds | `operation` = `create`, `createMany` or `list` | Per procedure call | — |
+| `ProcessingDuration` | Milliseconds | `operation` = `create`, `createMany`, `update`, `delete` or `list` | Per procedure call | — |
 | `ColdStart` | Count | `function_name` | First request of each execution environment (Powertools) | — |
 
 AWS metrics the stack alarms on:
@@ -22,14 +22,15 @@ AWS metrics the stack alarms on:
 | Alarm | Metric | Threshold |
 | --- | --- | --- |
 | `FunctionErrors` | `AWS/Lambda` `Errors` of the `leads` function | ≥ 1 in 5 minutes |
-| `FunctionThrottles` | `AWS/Lambda` `Throttles` of the `leads` function | ≥ 1 in 5 minutes |
+| `FunctionThrottles` | `AWS/Lambda` `Throttles` of the `leads` function, which reserves 10 executions | ≥ 1 in 5 minutes |
 | `Api5xx` | `AWS/ApiGateway` `5xx` of the CRM HTTP API | ≥ 1 in 5 minutes |
-| `TableSystemErrors` | `AWS/DynamoDB` `SystemErrors` on the leads table (GetItem, PutItem, Query) | ≥ 1 in 5 minutes |
+| `TableSystemErrors` | `AWS/DynamoDB` `SystemErrors` on the leads table (GetItem, PutItem, Query, UpdateItem, DeleteItem) | ≥ 1 in 5 minutes |
 | `PipelineOutage` | `RoofingCrm` `PipelineCallFailed`, `status` `5xx` plus `timeout` | ≥ 5 in 5 minutes |
 
 Every alarm treats missing data as not breaching and sends both ALARM and OK to one SNS topic (`AlertsTopicArn` in the
 stack outputs), so each one resolves itself. `pnpm deploy:aws` subscribes one email to the topic (docs/runbook.md).
-Expected rejections raise nothing: validation errors (400), the route throttles' 429 and a pipeline 404.
+Expected rejections raise nothing: validation errors (400), the route throttles' 429, a pipeline 404 and an edit of a
+lead that was deleted (404).
 
 Item 17's dashboard is not built yet (docs/decisions.md, 2026-10-20 F3 entry). These metrics can be graphed from
 CloudWatch, under Metrics → All metrics → `RoofingCrm`. The Lexicon and main-dashboard registration that the kit asks for belong to

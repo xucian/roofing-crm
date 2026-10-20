@@ -110,6 +110,47 @@ describe('the leads function', () => {
     expect(result.statusCode).toBe(400);
   });
 
+  it('edits, filters and deletes a lead through their own POST routes and the GET catch-all', async () => {
+    const repository = new MemoryRepository();
+    const ref = { workspace_id: WORKSPACE, property_id: 'fx-1', permit_id: 'FX-1 BP' };
+    await call(create(ref), repository);
+    const post = (procedure: string, body: unknown) =>
+      call(httpEvent({ method: 'POST', path: `/api/trpc/leads.${procedure}`, body }), repository);
+    const list = (filter: unknown) =>
+      call(
+        httpEvent({
+          method: 'GET',
+          path: '/api/trpc/leads.list',
+          query: `input=${encodeURIComponent(JSON.stringify({ workspace_id: WORKSPACE, filter }))}`,
+        }),
+        repository,
+      );
+
+    const updated = await post('update', { ...ref, status: 'working', note: 'Gate code 1234' });
+    expect(updated.result.statusCode).toBe(200);
+    expect(updated.body).toMatchObject({
+      result: {
+        data: { lead: { status: 'working', note: 'Gate code 1234' }, request_id: 'crm-req-1' },
+      },
+    });
+    expect((await list({ statuses: ['working'] })).body).toMatchObject({
+      result: { data: { items: [{ permit_id: 'FX-1 BP' }] } },
+    });
+    expect((await list({ statuses: ['new'] })).body).toMatchObject({
+      result: { data: { items: [] } },
+    });
+
+    expect((await post('delete', ref)).body).toMatchObject({
+      result: { data: { outcome: 'deleted', request_id: 'crm-req-1' } },
+    });
+    const gone = await post('update', { ...ref, status: 'closed' });
+    expect(gone.result.statusCode).toBe(404);
+    expect(gone.body).toMatchObject({
+      error: { data: { code: 'NOT_FOUND', requestId: 'crm-req-1', failure: null } },
+    });
+    expect((await post('update', ref)).result.statusCode).toBe(400);
+  });
+
   it('strips the base path only from CRM API paths', () => {
     const event = httpEvent({ method: 'POST', path: '/api/trpc/leads.create', body: {} });
     expect(withoutPrefix(event).rawPath).toBe('/leads.create');

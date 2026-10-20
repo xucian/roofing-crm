@@ -1,7 +1,7 @@
-import { leadKey, type Lead, type LeadPage } from '@roofing-crm/shared';
+import { leadKey, type Lead } from '@roofing-crm/shared';
 import type { APIGatewayProxyEventV2 } from 'aws-lambda';
 import type { Deadline } from '../deadline';
-import type { LeadRepository, PutOutcome } from '../leads/repository';
+import type { LeadPatch, LeadRepository, ListedPage, PutOutcome } from '../leads/repository';
 
 // Test doubles for the leads function. Pipeline bodies come from the synthetic contract fixtures
 // (`@roofing-crm/pipeline-client/testing`), never county data.
@@ -33,15 +33,55 @@ export class MemoryRepository implements LeadRepository {
     return Promise.resolve({ created: true, lead });
   }
 
-  list(workspaceId: string, cursor: string | null, limit: number): Promise<LeadPage> {
-    const keys = [...this.workspace(workspaceId).keys()].sort();
-    const start = cursor === null ? 0 : keys.indexOf(cursor) + 1;
-    const page = keys.slice(start, start + limit);
-    const last = page.at(-1);
-    return Promise.resolve({
-      items: page.map((key) => this.workspace(workspaceId).get(key)!),
-      next_cursor: start + limit < keys.length && last !== undefined ? last : null,
-    });
+  list(
+    workspaceId: string,
+    cursor: string | null,
+    limit: number,
+    matches: (lead: Lead) => boolean = () => true,
+  ): Promise<ListedPage> {
+    const leads = this.workspace(workspaceId);
+    const keys = [...leads.keys()].sort();
+    const items: Lead[] = [];
+    let scanned = 0;
+    for (const key of keys.slice(cursor === null ? 0 : keys.indexOf(cursor) + 1)) {
+      const lead = leads.get(key)!;
+      scanned += 1;
+      if (matches(lead)) items.push(lead);
+      if (items.length === limit) {
+        return Promise.resolve({ items, next_cursor: key === keys.at(-1) ? null : key, scanned });
+      }
+    }
+    return Promise.resolve({ items, next_cursor: null, scanned });
+  }
+
+  update(
+    workspaceId: string,
+    key: string,
+    patch: LeadPatch,
+    updatedAt: string,
+  ): Promise<Lead | null> {
+    const leads = this.workspace(workspaceId);
+    const lead = leads.get(key);
+    if (!lead) return Promise.resolve(null);
+    this.writes += 1;
+    const updated: Lead = {
+      ...lead,
+      ...(patch.status === undefined ? {} : { status: patch.status }),
+      ...(patch.note === undefined ? {} : { note: patch.note }),
+      updated_at: updatedAt,
+    };
+    leads.set(key, updated);
+    return Promise.resolve(updated);
+  }
+
+  delete(workspaceId: string, key: string): Promise<Lead | null> {
+    const leads = this.workspace(workspaceId);
+    const lead = leads.get(key) ?? null;
+    if (lead) {
+      this.writes += 1;
+      leads.delete(key);
+    }
+    return Promise.resolve(lead);
   }
 }
 

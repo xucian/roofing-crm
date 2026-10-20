@@ -1,4 +1,6 @@
 import { z } from 'zod';
+import { RADIUS_MILES } from './defaults';
+import { greatCircleMiles } from './geo';
 import { ULID_PATTERN } from './ulid';
 
 // The CRM's lead records (docs/decisions.md §5 and the metagross entry). These schemas are the
@@ -14,7 +16,7 @@ export const CREATE_MANY_MAX = 25;
 /** `leads.list` page size: the default and the most one page may ask for. */
 export const LEAD_LIST_PAGE = { default: 100, max: 200 } as const;
 
-/** Bounds on the free-text note (edited from F4). */
+/** Bounds on the free-text note. */
 export const LEAD_NOTE_MAX = 2000;
 
 /**
@@ -60,12 +62,20 @@ export const CreateManyLeadsInputSchema = z.object({
 });
 export type CreateManyLeadsInput = z.input<typeof CreateManyLeadsInputSchema>;
 
-export const ListLeadsInputSchema = z.object({
-  workspace_id: WorkspaceIdSchema,
-  cursor: z.string().max(2048).nullish(),
-  limit: z.int().min(1).max(LEAD_LIST_PAGE.max).default(LEAD_LIST_PAGE.default),
+/** Names one lead of the workspace: `leads.delete`, and the base of `leads.update`. */
+export const LeadInWorkspaceSchema = LeadRefSchema.extend({ workspace_id: WorkspaceIdSchema });
+
+/** Sets the lead's status, its note, or both; the snapshot never changes. */
+export const UpdateLeadInputSchema = LeadInWorkspaceSchema.extend({
+  status: LeadStatusSchema.optional(),
+  note: z.string().max(LEAD_NOTE_MAX).optional(),
+}).refine((input) => input.status !== undefined || input.note !== undefined, {
+  error: 'give a status, a note or both',
 });
-export type ListLeadsInput = z.input<typeof ListLeadsInputSchema>;
+export type UpdateLeadInput = z.input<typeof UpdateLeadInputSchema>;
+
+export const DeleteLeadInputSchema = LeadInWorkspaceSchema;
+export type DeleteLeadInput = z.input<typeof DeleteLeadInputSchema>;
 
 // The snapshot: pipeline fields copied when the lead is created, for display and for F4's filters.
 // The `leads` function reads them from the pipeline itself; it never takes them from the browser.
@@ -138,6 +148,82 @@ export const LeadSchema = z.object({
 });
 export type Lead = z.infer<typeof LeadSchema>;
 
+// Filters (docs/decisions.md §5): status, roof age, permit status group, open duration and a radius.
+// They read the snapshot, so a lead matches as it was when saved. The `leads` function applies them
+// to `leads.list` with this predicate; the browser uses the same one to mark an edited lead that
+// no longer matches.
+
+/** A lead's permit group: its snapshot permit's status group, or `none` without one. */
+export const LEAD_PERMIT_GROUPS = [...STATUS_GROUPS, 'none'] as const;
+export const LeadPermitGroupSchema = z.enum(LEAD_PERMIT_GROUPS);
+export type LeadPermitGroup = z.infer<typeof LeadPermitGroupSchema>;
+
+/** Years to days for the open-duration filter, as the contract's `long_open_years` counts them. */
+export const DAYS_PER_OPEN_YEAR = 365;
+
+/** Bounds of the filter's year fields, the map's roof-age range. */
+export const LEAD_FILTER_YEARS = { min: 0, max: 100 } as const;
+
+const filterYears = z.int().min(LEAD_FILTER_YEARS.min).max(LEAD_FILTER_YEARS.max);
+
+/** Every field is optional; a missing one does not filter. An empty list matches no lead. */
+export const LeadFilterSchema = z.object({
+  statuses: z.array(LeadStatusSchema).max(LEAD_STATUSES.length).optional(),
+  /** Strict, as on the map and in the contract: roof_age_years > roof_age_min. */
+  roof_age_min: filterYears.optional(),
+  permit_groups: z.array(LeadPermitGroupSchema).max(LEAD_PERMIT_GROUPS.length).optional(),
+  /** The permit has been open (or was, if stalled) at least this long: days >= years x 365. */
+  open_years_min: filterYears.optional(),
+  /** Great-circle miles around a point, the map's pin; the radius bounds are the map's. */
+  within: z
+    .object({
+      lat: z.number().min(-90).max(90),
+      lon: z.number().min(-180).max(180),
+      radius_miles: z.number().min(RADIUS_MILES.min).max(RADIUS_MILES.max),
+    })
+    .optional(),
+});
+export type LeadFilter = z.infer<typeof LeadFilterSchema>;
+
+export function leadPermitGroup(lead: Lead): LeadPermitGroup {
+  return lead.snapshot.permit?.status_group ?? 'none';
+}
+
+/** Whether the lead's snapshot meets every field of the filter. */
+export function matchesLeadFilter(lead: Lead, filter: LeadFilter): boolean {
+  const { snapshot } = lead;
+  if (filter.statuses && !filter.statuses.includes(lead.status)) return false;
+  if (filter.roof_age_min !== undefined) {
+    if (snapshot.roof_age_years === null || snapshot.roof_age_years <= filter.roof_age_min) {
+      return false;
+    }
+  }
+  if (filter.permit_groups && !filter.permit_groups.includes(leadPermitGroup(lead))) return false;
+  if (filter.open_years_min !== undefined) {
+    const days = snapshot.permit?.open_duration_days ?? null;
+    if (days === null || days < filter.open_years_min * DAYS_PER_OPEN_YEAR) return false;
+  }
+  if (filter.within) {
+    if (snapshot.lat === null || snapshot.lon === null) return false;
+    const miles = greatCircleMiles(filter.within, { lat: snapshot.lat, lon: snapshot.lon });
+    if (miles > filter.within.radius_miles) return false;
+  }
+  return true;
+}
+
+/** True when no field of the filter is set, so every lead matches. */
+export function isEmptyLeadFilter(filter: LeadFilter): boolean {
+  return (Object.keys(filter) as (keyof LeadFilter)[]).every((key) => filter[key] === undefined);
+}
+
+export const ListLeadsInputSchema = z.object({
+  workspace_id: WorkspaceIdSchema,
+  cursor: z.string().max(2048).nullish(),
+  limit: z.int().min(1).max(LEAD_LIST_PAGE.max).default(LEAD_LIST_PAGE.default),
+  filter: LeadFilterSchema.optional(),
+});
+export type ListLeadsInput = z.input<typeof ListLeadsInputSchema>;
+
 /** Why one row of a create could not be saved. */
 export const LEAD_FAILURE_CODES = [
   /** The pipeline has no such property or permit (404). */
@@ -180,4 +266,15 @@ export interface CreateManyLeadsResult {
 export interface LeadPage {
   items: Lead[];
   next_cursor: string | null;
+}
+
+export interface UpdateLeadResult {
+  lead: Lead;
+}
+
+/** `missing`: there was no such lead (deleted already, e.g. in another tab); nothing changed. */
+export type DeleteLeadOutcome = 'deleted' | 'missing';
+
+export interface DeleteLeadResult {
+  outcome: DeleteLeadOutcome;
 }

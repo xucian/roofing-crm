@@ -1,4 +1,10 @@
-import { leadKey, type Lead, type LeadFailure } from '@roofing-crm/shared';
+import {
+  LeadFilterSchema,
+  leadKey,
+  matchesLeadFilter,
+  type Lead,
+  type LeadFailure,
+} from '@roofing-crm/shared';
 
 // An in-memory stand-in for the CRM API (`/api/trpc/*`) in the web tests: it keeps leads per
 // workspace like the `leads` function, so a test can save, render the app again and see them.
@@ -18,13 +24,15 @@ export interface FakeCrm {
   handle: (url: URL, init: RequestInit | undefined) => Promise<Response>;
   calls: CrmCall[];
   leads: (workspace: string) => Lead[];
+  /** Stores a lead as if it had been saved earlier. */
+  put: (workspace: string, lead: Lead) => void;
   /** Makes these rows fail as the function would report them. */
   failRows: Map<string, LeadFailure>;
 }
 
 let requests = 0;
 
-function fixtureLead(row: Row, n: number): Lead {
+export function fixtureLead(row: Row, n: number): Lead {
   const number = /^fx-(\d+)$/.exec(row.property_id)?.[1] ?? '0';
   const at = new Date(Date.UTC(2026, 9, 20, 12, 0, n)).toISOString();
   const permitId = row.permit_id ?? '';
@@ -66,6 +74,18 @@ function fixtureLead(row: Row, n: number): Lead {
 const ok = (data: unknown, requestId: string): Response =>
   Response.json({ result: { data } }, { headers: { 'x-request-id': requestId } });
 
+const notFound = (message: string, requestId: string): Response =>
+  Response.json(
+    {
+      error: {
+        message,
+        code: -32004,
+        data: { code: 'NOT_FOUND', httpStatus: 404, requestId, failure: null },
+      },
+    },
+    { status: 404, headers: { 'x-request-id': requestId } },
+  );
+
 export function fakeCrm(): FakeCrm {
   const store = new Map<string, Map<string, Lead>>();
   const calls: CrmCall[] = [];
@@ -101,11 +121,30 @@ export function fakeCrm(): FakeCrm {
     const id = String(input.workspace_id);
 
     switch (procedure) {
-      case 'leads.list':
-        return ok(
-          { items: [...workspace(id).values()], next_cursor: null, request_id: requestId },
-          requestId,
+      case 'leads.list': {
+        const filter = input.filter === undefined ? null : LeadFilterSchema.parse(input.filter);
+        const items = [...workspace(id).values()].filter(
+          (lead) => filter === null || matchesLeadFilter(lead, filter),
         );
+        return ok({ items, next_cursor: null, request_id: requestId }, requestId);
+      }
+      case 'leads.update': {
+        const key = leadKey(input as unknown as Row);
+        const lead = workspace(id).get(key);
+        if (!lead) return notFound('This workspace has no such lead.', requestId);
+        const updated: Lead = {
+          ...lead,
+          ...(input.status === undefined ? {} : { status: input.status as Lead['status'] }),
+          ...(input.note === undefined ? {} : { note: input.note as string }),
+          updated_at: '2026-10-21T09:00:00.000Z',
+        };
+        workspace(id).set(key, updated);
+        return ok({ lead: updated, request_id: requestId }, requestId);
+      }
+      case 'leads.delete': {
+        const deleted = workspace(id).delete(leadKey(input as unknown as Row));
+        return ok({ outcome: deleted ? 'deleted' : 'missing', request_id: requestId }, requestId);
+      }
       case 'leads.create': {
         const row = createRow(id, input as unknown as Row);
         if (row.outcome === 'failed') {
@@ -142,5 +181,8 @@ export function fakeCrm(): FakeCrm {
     calls,
     failRows,
     leads: (id) => [...workspace(id).values()],
+    put: (id, lead) => {
+      workspace(id).set(leadKey(lead), lead);
+    },
   };
 }

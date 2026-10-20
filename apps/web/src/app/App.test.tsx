@@ -9,7 +9,7 @@ import {
   fixturePermit,
   fixtureProperty,
 } from '../test/fixtures';
-import { fakeCrm, type FakeCrm } from '../test/fake-crm';
+import { fakeCrm, fixtureLead, type FakeCrm } from '../test/fake-crm';
 import { App } from './App';
 
 // The WebGL map cannot run in jsdom; a stub shows the props the app hands it.
@@ -625,7 +625,9 @@ describe('F3: save leads', () => {
     const page = await screen.findByRole('region', { name: /Leads/ });
     expect(await within(page).findByText('2 FIXTURE ST, TESTVILLE 00000')).toBeInTheDocument();
     expect(within(page).getByText('Property lead · property fx-2')).toBeInTheDocument();
-    expect(within(page).getByText('New')).toBeInTheDocument();
+    expect(
+      within(page).getByRole('combobox', { name: 'Status of 2 FIXTURE ST, TESTVILLE 00000' }),
+    ).toHaveValue('new');
     expect(within(page).getByText(/Longest-open roofing permit FX-1 BP/)).toBeInTheDocument();
     expect(within(page).getByText('Open 5.4 years, since 2021-04-01')).toBeInTheDocument();
     expect(within(page).getByText(/Contractor as printed: FIXTURE ROOFER/)).toBeInTheDocument();
@@ -648,4 +650,243 @@ describe('F3: save leads', () => {
     expect(await screen.findByText(/No leads yet/)).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Leads 0' })).toHaveAttribute('aria-current', 'page');
   });
+});
+
+describe('F4: manage leads', () => {
+  const config = { pipelineApiBase: API_BASE };
+  const routes = {
+    '/v1/properties/search': () => searchPage([fixtureProperty(1), fixtureProperty(2)], 2, null),
+    '/v1/meta': () => ({ body: fixtureMeta() }),
+  };
+  const WORKSPACE = '01JBQ7Z0000000000000000000';
+  const ADDRESS = (n: number) => `${String(n)} FIXTURE ST, TESTVILLE 00000`;
+
+  // Three leads that differ in every filtered field. The map's pin is Austin (30.2672, -97.7431):
+  // fx-1 is about 1.3 miles from it, fx-2 about 9 miles, fx-3 about 0.5 miles.
+  const seeded = {
+    one: fixtureLead({ property_id: 'fx-1' }, 1),
+    two: (() => {
+      const lead = fixtureLead({ property_id: 'fx-2' }, 2);
+      return {
+        ...lead,
+        status: 'working' as const,
+        snapshot: {
+          ...lead.snapshot,
+          lat: 30.4,
+          roof_age_years: 12,
+          permit: lead.snapshot.permit && {
+            ...lead.snapshot.permit,
+            status_group: 'stalled' as const,
+            open_duration_days: 4000,
+            days_since_expiry: 90,
+          },
+        },
+      };
+    })(),
+    three: (() => {
+      const lead = fixtureLead({ property_id: 'fx-3' }, 3);
+      return {
+        ...lead,
+        status: 'closed' as const,
+        snapshot: { ...lead.snapshot, lat: 30.26, lon: -97.74, roof_age_years: 25, permit: null },
+      };
+    })(),
+  };
+
+  function openLeads(...leads: (keyof typeof seeded)[]) {
+    window.localStorage.setItem('roofing-crm.workspace', WORKSPACE);
+    for (const name of leads) crm.put(WORKSPACE, seeded[name]);
+    window.history.replaceState(null, '', '/leads');
+    stubPipeline(routes);
+    return render(<App config={config} />);
+  }
+  const card = (n: number) => screen.findByRole('listitem', { name: ADDRESS(n) });
+  const cards = () =>
+    screen
+      .queryAllByRole('listitem')
+      .filter((item) => item.classList.contains('lead-card'))
+      .map((item) => item.getAttribute('aria-label'));
+  const lastList = () => crm.calls.filter((call) => call.procedure === 'leads.list').at(-1);
+  const summary = async () => (await screen.findByText(/match(es)? the filters\./)).textContent;
+
+  it('sets the status and the note, and both are there after a reload', async () => {
+    const first = openLeads('one');
+    const lead = await card(1);
+    await userEvent.selectOptions(
+      within(lead).getByRole('combobox', { name: `Status of ${ADDRESS(1)}` }),
+      'working',
+    );
+    expect(await within(lead).findByText(/Status set to Working\./)).toHaveTextContent(
+      /Request id crm-req-\d+/,
+    );
+    expect(crm.calls.at(-1)).toEqual({
+      procedure: 'leads.update',
+      input: { workspace_id: WORKSPACE, property_id: 'fx-1', permit_id: '', status: 'working' },
+    });
+
+    await userEvent.click(within(lead).getByRole('button', { name: 'Add a note' }));
+    await userEvent.type(within(lead).getByRole('textbox', { name: 'Note' }), 'Call after 5pm');
+    expect(within(lead).getByText(/14 of 2,000 characters/)).toBeInTheDocument();
+    await userEvent.click(within(lead).getByRole('button', { name: 'Save note' }));
+    expect(await within(lead).findByText(/Note saved\./)).toBeInTheDocument();
+    expect(within(lead).getByText('Call after 5pm')).toBeInTheDocument();
+    expect(within(lead).queryByRole('textbox')).not.toBeInTheDocument();
+    expect(crm.calls.at(-1)?.input).toMatchObject({ note: 'Call after 5pm' });
+    first.unmount();
+
+    render(<App config={config} />);
+    const reloaded = await card(1);
+    expect(within(reloaded).getByRole('combobox', { name: `Status of ${ADDRESS(1)}` })).toHaveValue(
+      'working',
+    );
+    expect(within(reloaded).getByText('Call after 5pm')).toBeInTheDocument();
+    expect(within(reloaded).getByRole('button', { name: 'Edit note' })).toBeInTheDocument();
+  });
+
+  it('cancels a note edit without a request', async () => {
+    openLeads('one');
+    const lead = await card(1);
+    const calls = crm.calls.length;
+    await userEvent.click(within(lead).getByRole('button', { name: 'Add a note' }));
+    await userEvent.type(within(lead).getByRole('textbox', { name: 'Note' }), 'draft');
+    await userEvent.click(within(lead).getByRole('button', { name: 'Cancel' }));
+    expect(within(lead).queryByText('draft')).not.toBeInTheDocument();
+    expect(crm.calls).toHaveLength(calls);
+  });
+
+  it('deletes a lead only after the confirmation, and the map can save it again', async () => {
+    openLeads('one', 'three');
+    const lead = await card(1);
+    await userEvent.click(within(lead).getByRole('button', { name: 'Delete…' }));
+    await userEvent.click(within(lead).getByRole('button', { name: 'Keep' }));
+    expect(crm.calls.some((call) => call.procedure === 'leads.delete')).toBe(false);
+
+    await userEvent.click(within(lead).getByRole('button', { name: 'Delete…' }));
+    const confirm = within(lead).getByRole('group', { name: `Delete the lead for ${ADDRESS(1)}?` });
+    await userEvent.click(within(confirm).getByRole('button', { name: 'Delete' }));
+
+    expect(await screen.findByText(`Deleted the lead for ${ADDRESS(1)}.`)).toBeInTheDocument();
+    expect(cards()).toEqual([ADDRESS(3)]);
+    expect(crm.calls.at(-1)).toEqual({
+      procedure: 'leads.delete',
+      input: { workspace_id: WORKSPACE, property_id: 'fx-1', permit_id: '' },
+    });
+    expect(crm.leads(WORKSPACE).map((saved) => saved.property_id)).toEqual(['fx-3']);
+    expect(screen.getByRole('link', { name: 'Leads 1' })).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('link', { name: 'Leads 1' }));
+    await userEvent.click(screen.getByRole('link', { name: 'Map' }));
+    expect(
+      await screen.findByRole('button', { name: `Save ${ADDRESS(1)} as a lead` }),
+    ).toBeEnabled();
+  });
+
+  it('filters by status and roof age in the leads function, and clears the filters', async () => {
+    openLeads('one', 'two', 'three');
+    await card(3);
+    expect(cards()).toHaveLength(3);
+    const status = screen.getByRole('group', { name: 'Status' });
+    await userEvent.click(within(status).getByRole('checkbox', { name: 'Closed' }));
+    expect(await summary()).toBe('2 of 3 leads match the filters.');
+    expect(lastList()?.input.filter).toEqual({ statuses: ['new', 'working'] });
+    expect(cards().sort()).toEqual([ADDRESS(1), ADDRESS(2)]);
+    expect(screen.getByText(/^crm-req-/, { selector: '.leads-filter-summary code' })).toBeVisible();
+
+    await userEvent.type(screen.getByRole('spinbutton', { name: /Roof older than/ }), '20');
+    await waitForFilter({ statuses: ['new', 'working'], roof_age_min: 20 });
+    expect(cards()).toEqual([ADDRESS(1)]);
+    expect(await summary()).toBe('1 of 3 leads match the filters.');
+
+    await userEvent.click(screen.getByRole('button', { name: 'Clear filters' }));
+    expect(await card(2)).toBeInTheDocument();
+    expect(cards()).toHaveLength(3);
+    expect(screen.queryByText(/match the filters/)).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Clear filters' })).toBeDisabled();
+  });
+
+  it('filters by permit group and open duration', async () => {
+    openLeads('one', 'two', 'three');
+    await card(3);
+    const permit = screen.getByRole('group', { name: 'Permit' });
+    for (const name of ['Open', 'Closed', 'Needs review']) {
+      await userEvent.click(within(permit).getByRole('checkbox', { name }));
+    }
+    await waitForFilter({ permit_groups: ['stalled', 'none'] });
+    expect(cards().sort()).toEqual([ADDRESS(2), ADDRESS(3)]);
+
+    await userEvent.click(screen.getByRole('button', { name: 'Clear filters' }));
+    await userEvent.type(screen.getByRole('spinbutton', { name: /Permit open at least/ }), '6');
+    await waitForFilter({ open_years_min: 6 });
+    // fx-2's stalled permit was open 4,000 days; fx-1's open one 2,000 (under 6 x 365).
+    expect(cards()).toEqual([ADDRESS(2)]);
+  });
+
+  it("filters by a radius around the map's pin, the map's radius unless one is typed", async () => {
+    openLeads('one', 'two', 'three');
+    await card(3);
+    await userEvent.click(screen.getByRole('checkbox', { name: "Near the map's pin" }));
+    await waitForFilter({ within: { lat: 30.2672, lon: -97.7431, radius_miles: 5 } });
+    expect(cards().sort()).toEqual([ADDRESS(1), ADDRESS(3)]);
+    const form = screen.getByRole('form', { name: 'Filter leads' });
+    expect(within(form).getByText('30.26720, -97.74310')).toBeInTheDocument();
+
+    await userEvent.type(
+      screen.getByRole('spinbutton', { name: "Miles from the map's pin" }),
+      '0.8',
+    );
+    await waitForFilter({ within: { lat: 30.2672, lon: -97.7431, radius_miles: 0.8 } });
+    expect(cards()).toEqual([ADDRESS(3)]);
+  });
+
+  it('keeps an edited lead the filters no longer match, marked, until they change', async () => {
+    openLeads('one', 'two');
+    await card(2);
+    const status = screen.getByRole('group', { name: 'Status' });
+    await userEvent.click(within(status).getByRole('checkbox', { name: 'Working' }));
+    await waitForFilter({ statuses: ['new', 'closed'] });
+    const lead = await card(1);
+    await userEvent.selectOptions(
+      within(lead).getByRole('combobox', { name: `Status of ${ADDRESS(1)}` }),
+      'working',
+    );
+    expect(await within(lead).findByText(/No longer matches the filters/)).toBeInTheDocument();
+
+    // Every status ticked again: no filter, so the page shows the whole list, edits included.
+    await userEvent.click(within(status).getByRole('checkbox', { name: 'Working' }));
+    await vi.waitFor(() => {
+      expect(screen.queryByText(/match the filters/)).not.toBeInTheDocument();
+    });
+    expect(cards().sort()).toEqual([ADDRESS(1), ADDRESS(2)]);
+    expect(within(await card(1)).queryByText(/No longer matches/)).not.toBeInTheDocument();
+  });
+
+  it('drops a lead that an edit finds deleted elsewhere, and says so', async () => {
+    openLeads('one', 'three');
+    const lead = await card(1);
+    // Deleted from another tab of the same workspace.
+    await crm.handle(new URL('/api/trpc/leads.delete', window.location.href), {
+      method: 'POST',
+      body: JSON.stringify({ workspace_id: WORKSPACE, property_id: 'fx-1', permit_id: '' }),
+    });
+    await userEvent.selectOptions(
+      within(lead).getByRole('combobox', { name: `Status of ${ADDRESS(1)}` }),
+      'closed',
+    );
+    expect(
+      await screen.findByText(
+        `The lead for ${ADDRESS(1)} was deleted elsewhere, so it has left the list.`,
+      ),
+    ).toBeInTheDocument();
+    expect(cards()).toEqual([ADDRESS(3)]);
+  });
+
+  /** Waits until the page has read the list with this filter and shows the answer. */
+  async function waitForFilter(filter: Record<string, unknown>): Promise<void> {
+    await vi.waitFor(() => {
+      expect(lastList()?.input.filter).toEqual(filter);
+    });
+    await vi.waitFor(() => {
+      expect(screen.queryByText('Filtering leads…')).not.toBeInTheDocument();
+    });
+  }
 });

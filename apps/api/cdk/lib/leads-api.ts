@@ -24,19 +24,34 @@ const HANDLER_ENTRY = fileURLToPath(new URL('../../src/handler.ts', import.meta.
 /** The CRM API's base path; CloudFront sends `/api/*` here unchanged. Fixed once deployed. */
 export const API_BASE_PATH = '/api/trpc';
 
+/** The mutations, each on its own POST route so its throttle applies (httpLink, no batching). */
+export const MUTATIONS = ['create', 'createMany', 'update', 'delete'] as const;
+
 /**
- * Route throttles (metagross item 4), tighter than its example: the account runs 10 Lambda
- * executions in all and nothing can be reserved yet (docs/decisions.md, 2026-10-20), so these rates
- * alone bound the `leads` function. `createMany` reads the pipeline once per row for up to 25 s.
- * Queries share the stage default.
+ * Route throttles (metagross item 4), tighter than its example. `createMany` reads the pipeline once
+ * per row for up to 25 s; `update` and `delete` are one DynamoDB write each. Queries share the stage
+ * default.
  */
 export const THROTTLES = {
   stage: { rateLimit: 10, burstLimit: 20 },
   routes: {
     [`POST ${API_BASE_PATH}/leads.create`]: { rateLimit: 2, burstLimit: 5 },
     [`POST ${API_BASE_PATH}/leads.createMany`]: { rateLimit: 0.5, burstLimit: 2 },
+    [`POST ${API_BASE_PATH}/leads.update`]: { rateLimit: 2, burstLimit: 5 },
+    [`POST ${API_BASE_PATH}/leads.delete`]: { rateLimit: 2, burstLimit: 5 },
   },
-} as const;
+} satisfies {
+  stage: { rateLimit: number; burstLimit: number };
+  routes: Record<`POST ${typeof API_BASE_PATH}/leads.${(typeof MUTATIONS)[number]}`, object>;
+};
+
+/**
+ * The `leads` function's reserved concurrency (§3, metagross item 9): its bulkhead, so the F5 agent
+ * cannot starve lead writes, and its cap. It covers the route throttles' worst case: two 25 s
+ * `createMany` calls plus creates, edits and lists. The account allows 1,000 executions since the
+ * increase (docs/decisions.md, 2026-10-20 F4 entry).
+ */
+export const LEADS_RESERVED_CONCURRENCY = 10;
 
 /** Lambda timeout: above the 25 s handler deadline, under API Gateway's 30 s integration cap. */
 export const FUNCTION_TIMEOUT = Duration.seconds(29);
@@ -47,7 +62,7 @@ export interface LeadsApiProps {
 }
 
 /**
- * The CRM API (F3): one `leads` NodejsFunction serving tRPC, a DynamoDB table of leads, an HTTP API
+ * The CRM API (F3, F4): one `leads` NodejsFunction serving tRPC, a DynamoDB table of leads, an HTTP API
  * whose routes CloudFront reaches under `/api/*`, and the alarms that watch them (metagross items 3,
  * 4, 9, 15, 16, 18, 22). The agent function joins in F5.
  */
@@ -94,7 +109,7 @@ export class LeadsApi extends Construct {
       timeout: FUNCTION_TIMEOUT,
       tracing: lambda.Tracing.ACTIVE,
       logGroup: this.functionLogs,
-      // No reserved concurrency: the account's 10 executions leave nothing to reserve (2026-10-20).
+      reservedConcurrentExecutions: LEADS_RESERVED_CONCURRENCY,
       environment: {
         LEADS_TABLE: this.table.tableName,
         ...(props.pipelineApiBase === null ? {} : { PIPELINE_API_BASE: props.pipelineApiBase }),
@@ -111,7 +126,14 @@ export class LeadsApi extends Construct {
         externalModules: [],
       },
     });
-    this.table.grant(this.function, 'dynamodb:GetItem', 'dynamodb:PutItem', 'dynamodb:Query');
+    this.table.grant(
+      this.function,
+      'dynamodb:GetItem',
+      'dynamodb:PutItem',
+      'dynamodb:Query',
+      'dynamodb:UpdateItem',
+      'dynamodb:DeleteItem',
+    );
 
     this.httpApi = new apigwv2.HttpApi(this, 'HttpApi', {
       apiName: `${Stack.of(this).stackName}-api`,
@@ -151,16 +173,13 @@ export class LeadsApi extends Construct {
     // a GET catch-all. Any other method or path is answered by API Gateway with 404.
     const integration = new HttpLambdaIntegration('Leads', this.function);
     const routes = [
-      ...this.httpApi.addRoutes({
-        path: `${API_BASE_PATH}/leads.create`,
-        methods: [apigwv2.HttpMethod.POST],
-        integration,
-      }),
-      ...this.httpApi.addRoutes({
-        path: `${API_BASE_PATH}/leads.createMany`,
-        methods: [apigwv2.HttpMethod.POST],
-        integration,
-      }),
+      ...MUTATIONS.flatMap((mutation) =>
+        this.httpApi.addRoutes({
+          path: `${API_BASE_PATH}/leads.${mutation}`,
+          methods: [apigwv2.HttpMethod.POST],
+          integration,
+        }),
+      ),
       ...this.httpApi.addRoutes({
         path: `${API_BASE_PATH}/{proxy+}`,
         methods: [apigwv2.HttpMethod.GET],
@@ -214,7 +233,7 @@ export class LeadsApi extends Construct {
       'FunctionThrottles',
       this.function.metricThrottles({ period: fiveMinutes, statistic: 'Sum' }),
       1,
-      'The leads function was throttled: the account ran out of its 10 concurrent executions.',
+      `The leads function was throttled: it reached its reserved concurrency of ${String(LEADS_RESERVED_CONCURRENCY)}.`,
     );
     alarm(
       'Api5xx',
@@ -229,6 +248,8 @@ export class LeadsApi extends Construct {
           dynamodb.Operation.GET_ITEM,
           dynamodb.Operation.PUT_ITEM,
           dynamodb.Operation.QUERY,
+          dynamodb.Operation.UPDATE_ITEM,
+          dynamodb.Operation.DELETE_ITEM,
         ],
         period: fiveMinutes,
       }),

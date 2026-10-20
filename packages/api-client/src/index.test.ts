@@ -59,6 +59,7 @@ describe('describeCrmApiError', () => {
     expect(describeCrmApiError(error)).toEqual({
       message: 'Not found in the pipeline API (HTTP 404: not_found).',
       status: 404,
+      code: 'NOT_FOUND',
       requestId: 'crm-1',
       failure: { code: 'not_found', message: 'x', pipeline_request_id: 'pl-1' },
     });
@@ -73,7 +74,22 @@ describe('describeCrmApiError', () => {
     expect(describeCrmApiError(error)).toMatchObject({
       message: 'The CRM API is busy (HTTP 429). Wait a moment and try again.',
       status: 429,
+      code: null,
       requestId: 'gw-1',
+    });
+  });
+
+  it("tells API Gateway's 404 for a missing route from the function's NOT_FOUND", async () => {
+    const { fetch } = stub(404, { message: 'Not Found' }, { 'apigw-requestid': 'gw-2' });
+    const client = createCrmApiClient({ url: 'https://crm.example.org/api/trpc', fetch });
+    const error = await client.leads.update
+      .mutate({ workspace_id: WORKSPACE, property_id: 'fx-1', status: 'closed' })
+      .catch((caught: unknown) => caught);
+    expect(describeCrmApiError(error)).toMatchObject({
+      message: 'The CRM API failed (HTTP 404).',
+      status: 404,
+      code: null,
+      requestId: 'gw-2',
     });
   });
 });

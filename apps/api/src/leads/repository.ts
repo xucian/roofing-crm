@@ -1,11 +1,20 @@
 import { ConditionalCheckFailedException } from '@aws-sdk/client-dynamodb';
 import {
+  DeleteCommand,
   GetCommand,
   PutCommand,
   QueryCommand,
+  UpdateCommand,
   type DynamoDBDocumentClient,
 } from '@aws-sdk/lib-dynamodb';
-import { LeadSchema, leadKey, type Lead, type LeadPage } from '@roofing-crm/shared';
+import {
+  LEAD_LIST_PAGE,
+  LeadSchema,
+  leadKey,
+  type Lead,
+  type LeadPage,
+  type LeadStatus,
+} from '@roofing-crm/shared';
 
 /**
  * The table (docs/decisions.md §5, metagross entry): partition key `workspace_id`, sort key
@@ -15,11 +24,43 @@ export const TABLE_KEYS = { partition: 'workspace_id', sort: 'lead_key' } as con
 
 export type PutOutcome = { created: true; lead: Lead } | { created: false; lead: Lead };
 
+/** The fields an edit may set; the snapshot and the keys never change. */
+export interface LeadPatch {
+  status?: LeadStatus | undefined;
+  note?: string | undefined;
+}
+
+/** A list page, and how many leads were read to fill it (more than it holds when filtering). */
+export interface ListedPage extends LeadPage {
+  scanned: number;
+}
+
+/**
+ * A filtered list reads at most this many leads per request. A page that would need more ends
+ * early with a cursor, so a large workspace cannot keep one request reading.
+ */
+export const LIST_SCAN_MAX = 10 * LEAD_LIST_PAGE.max;
+
 export interface LeadRepository {
   get(workspaceId: string, key: string): Promise<Lead | null>;
   /** Writes the lead unless one with its key exists; then returns that one, unchanged. */
   putNew(workspaceId: string, lead: Lead): Promise<PutOutcome>;
-  list(workspaceId: string, cursor: string | null, limit: number): Promise<LeadPage>;
+  /** Up to `limit` leads that `matches` keeps, in sort-key order, from after the cursor. */
+  list(
+    workspaceId: string,
+    cursor: string | null,
+    limit: number,
+    matches?: (lead: Lead) => boolean,
+  ): Promise<ListedPage>;
+  /** Sets the patch's fields and `updated_at`; null when there is no such lead (nothing written). */
+  update(
+    workspaceId: string,
+    key: string,
+    patch: LeadPatch,
+    updatedAt: string,
+  ): Promise<Lead | null>;
+  /** Deletes the lead and returns it; null when there was none. */
+  delete(workspaceId: string, key: string): Promise<Lead | null>;
 }
 
 /** A list cursor that is not one this function issued for this workspace. */
@@ -86,25 +127,87 @@ export function createLeadRepository(doc: DynamoDBDocumentClient, table: string)
       }
     },
 
-    async list(workspaceId, cursor, limit) {
-      const { Items = [], LastEvaluatedKey } = await doc.send(
-        new QueryCommand({
+    // DynamoDB's own FilterExpression would cost the same reads; the predicate is shared with the
+    // browser instead (docs/decisions.md, F4 entry). The cursor is the stored sort key of the last lead read.
+    async list(workspaceId, cursor, limit, matches = () => true) {
+      const items: Lead[] = [];
+      let after = cursor === null ? null : decodeCursor(cursor);
+      let scanned = 0;
+      for (;;) {
+        const { Items = [], LastEvaluatedKey } = await doc.send(
+          new QueryCommand({
+            TableName: table,
+            KeyConditionExpression: '#partition = :workspace',
+            ExpressionAttributeNames: { '#partition': TABLE_KEYS.partition },
+            ExpressionAttributeValues: { ':workspace': workspaceId },
+            Limit: limit,
+            ...(after === null
+              ? {}
+              : {
+                  ExclusiveStartKey: {
+                    [TABLE_KEYS.partition]: workspaceId,
+                    [TABLE_KEYS.sort]: after,
+                  },
+                }),
+          }),
+        );
+        for (const [index, item] of Items.entries()) {
+          const lead = parseLead(item);
+          scanned += 1;
+          if (matches(lead)) items.push(lead);
+          const lastOfTable = index === Items.length - 1 && LastEvaluatedKey === undefined;
+          if (items.length === limit || (scanned >= LIST_SCAN_MAX && !lastOfTable)) {
+            return { items, next_cursor: lastOfTable ? null : encodeCursor(item), scanned };
+          }
+        }
+        if (LastEvaluatedKey === undefined) return { items, next_cursor: null, scanned };
+        after = LastEvaluatedKey[TABLE_KEYS.sort] as string;
+      }
+    },
+
+    async update(workspaceId, key, patch, updatedAt) {
+      const names: Record<string, string> = { '#sort': TABLE_KEYS.sort, '#updated': 'updated_at' };
+      const values: Record<string, unknown> = { ':updated': updatedAt };
+      const sets = ['#updated = :updated'];
+      if (patch.status !== undefined) {
+        names['#status'] = 'status';
+        values[':status'] = patch.status;
+        sets.push('#status = :status');
+      }
+      if (patch.note !== undefined) {
+        names['#note'] = 'note';
+        values[':note'] = patch.note;
+        sets.push('#note = :note');
+      }
+      try {
+        const { Attributes } = await doc.send(
+          new UpdateCommand({
+            TableName: table,
+            Key: { [TABLE_KEYS.partition]: workspaceId, [TABLE_KEYS.sort]: key },
+            UpdateExpression: `SET ${sets.join(', ')}`,
+            // Never create a lead here: an edit of a deleted lead changes nothing.
+            ConditionExpression: 'attribute_exists(#sort)',
+            ExpressionAttributeNames: names,
+            ExpressionAttributeValues: values,
+            ReturnValues: 'ALL_NEW',
+          }),
+        );
+        return Attributes ? parseLead(Attributes) : null;
+      } catch (error) {
+        if (error instanceof ConditionalCheckFailedException) return null;
+        throw error;
+      }
+    },
+
+    async delete(workspaceId, key) {
+      const { Attributes } = await doc.send(
+        new DeleteCommand({
           TableName: table,
-          KeyConditionExpression: '#partition = :workspace',
-          ExpressionAttributeNames: { '#partition': TABLE_KEYS.partition },
-          ExpressionAttributeValues: { ':workspace': workspaceId },
-          Limit: limit,
-          ...(cursor === null
-            ? {}
-            : {
-                ExclusiveStartKey: {
-                  [TABLE_KEYS.partition]: workspaceId,
-                  [TABLE_KEYS.sort]: decodeCursor(cursor),
-                },
-              }),
+          Key: { [TABLE_KEYS.partition]: workspaceId, [TABLE_KEYS.sort]: key },
+          ReturnValues: 'ALL_OLD',
         }),
       );
-      return { items: Items.map(parseLead), next_cursor: encodeCursor(LastEvaluatedKey) };
+      return Attributes ? parseLead(Attributes) : null;
     },
   };
 }

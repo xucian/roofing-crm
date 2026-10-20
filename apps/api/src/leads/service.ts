@@ -10,13 +10,18 @@ import {
 import {
   LeadSchema,
   leadKey,
+  matchesLeadFilter,
   type CreateLeadResult,
   type CreateManyLeadsResult,
   type CreateManyRowResult,
+  type DeleteLeadResult,
   type Lead,
   type LeadFailure,
+  type LeadFilter,
   type LeadPage,
   type LeadSnapshot,
+  type LeadStatus,
+  type UpdateLeadResult,
 } from '@roofing-crm/shared';
 import { MIN_CALL_MS, DEADLINE_RESERVE_MS, type Deadline } from '../deadline';
 import { METRIC } from '../metric-names';
@@ -24,6 +29,11 @@ import type { RequestMetrics } from '../observability';
 import { DeadlineExceeded } from '../pipeline';
 import type { LeadRepository } from './repository';
 import { buildSnapshot, permitSnapshot } from './snapshot';
+
+/** An edit named a lead the workspace does not have (deleted, or never saved). */
+export class LeadNotFound extends Error {
+  override readonly name = 'LeadNotFound';
+}
 
 /** One row could not be saved; `create` throws it, `createMany` reports it in the row. */
 export class LeadRowFailure extends Error {
@@ -57,7 +67,20 @@ export interface LeadService {
     workspace_id: string;
     cursor?: string | null | undefined;
     limit: number;
+    filter?: LeadFilter | undefined;
   }): Promise<LeadPage>;
+  update(input: {
+    workspace_id: string;
+    property_id: string;
+    permit_id: string;
+    status?: LeadStatus | undefined;
+    note?: string | undefined;
+  }): Promise<UpdateLeadResult>;
+  delete(input: {
+    workspace_id: string;
+    property_id: string;
+    permit_id: string;
+  }): Promise<DeleteLeadResult>;
 }
 
 interface Ref {
@@ -66,6 +89,13 @@ interface Ref {
 }
 
 const DIMENSIONS = { operation: 'create' } as const;
+
+/** What a log line may say about a filter: its fields, never the point of a radius (a GPS fix). */
+export function describeFilter(filter: LeadFilter | undefined): Record<string, unknown> | null {
+  if (!filter) return null;
+  const { within, ...rest } = filter;
+  return { ...rest, ...(within ? { within_miles: within.radius_miles } : {}) };
+}
 
 /**
  * Saving leads (README AC 8, the creating half). Per row: an existing lead is returned as it is, with
@@ -222,8 +252,61 @@ export function createLeadService(deps: LeadServiceDeps): LeadService {
       };
     },
 
-    list(input) {
-      return deps.repository.list(input.workspace_id, input.cursor ?? null, input.limit);
+    async list(input) {
+      const { filter } = input;
+      const listed = await deps.repository.list(
+        input.workspace_id,
+        input.cursor ?? null,
+        input.limit,
+        filter ? (lead) => matchesLeadFilter(lead, filter) : undefined,
+      );
+      deps.logger.info('leads listed', {
+        filter: describeFilter(filter),
+        returned: listed.items.length,
+        scanned: listed.scanned,
+        has_more: listed.next_cursor !== null,
+      });
+      return { items: listed.items, next_cursor: listed.next_cursor };
+    },
+
+    async update(input) {
+      const ref = { property_id: input.property_id, permit_id: input.permit_id };
+      const lead = await deps.repository.update(
+        input.workspace_id,
+        leadKey(ref),
+        { status: input.status, note: input.note },
+        now().toISOString(),
+      );
+      if (!lead) {
+        deps.logger.info('lead not updated', { ...ref, outcome: 'missing' });
+        throw new LeadNotFound('This workspace has no such lead: it was deleted, or never saved.');
+      }
+      deps.metrics.count(METRIC.leadProcessed, { operation: 'update' });
+      // Which fields changed and the new status; the note itself is never logged.
+      deps.logger.info('lead updated', {
+        ...ref,
+        lead_id: lead.lead_id,
+        fields: [
+          input.status === undefined ? null : 'status',
+          input.note === undefined ? null : 'note',
+        ].filter((field) => field !== null),
+        status: lead.status,
+        note_length: lead.note.length,
+      });
+      return { lead };
+    },
+
+    async delete(input) {
+      const ref = { property_id: input.property_id, permit_id: input.permit_id };
+      const deleted = await deps.repository.delete(input.workspace_id, leadKey(ref));
+      const outcome = deleted ? 'deleted' : 'missing';
+      deps.metrics.count(METRIC.leadProcessed, { operation: 'delete' });
+      deps.logger.info(deleted ? 'lead deleted' : 'lead not deleted', {
+        ...ref,
+        lead_id: deleted?.lead_id ?? null,
+        outcome,
+      });
+      return { outcome };
     },
   };
 }
