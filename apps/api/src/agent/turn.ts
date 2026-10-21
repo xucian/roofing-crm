@@ -1,6 +1,12 @@
 import { createHash } from 'node:crypto';
 import type { Meta, PipelineClient } from '@roofing-crm/pipeline-client';
-import type { ChatMessage, ChatOutcome, ChatResponse, GeoPoint } from '@roofing-crm/shared';
+import type {
+  ChatMessage,
+  ChatOfferedLead,
+  ChatOutcome,
+  ChatResponse,
+  GeoPoint,
+} from '@roofing-crm/shared';
 import { isStepCount, type ModelMessage, type wrapLanguageModel } from 'ai';
 import type { LeadService } from '../leads/service';
 import { BEDROCK_PROMPT_CACHE_METADATA } from './bedrock-prompt-cache';
@@ -17,7 +23,13 @@ import { CoordinateGuard } from './guard';
 import type { LangSmithFacade } from './langsmith';
 import { PROMPT_VERSION, parseFinalMessage, pinInstruction, systemPrompt } from './prompt';
 import { sanitizeAnswer } from './sanitize';
-import { asksToSaveLeads, buildTurnTools, type ToolCallRecord } from './tools';
+import {
+  asksToSaveLeads,
+  buildTurnTools,
+  offeredLeads,
+  offeredToolNames,
+  type ToolCallRecord,
+} from './tools';
 
 type WrappedModel = Parameters<typeof wrapLanguageModel>[0]['model'];
 
@@ -58,6 +70,10 @@ export interface TurnStats {
   evidence: number;
   cited: number;
   leads_created: number;
+  /** Records the answer offers to save (`save_offer`, its Save button). */
+  save_offer: number;
+  /** The answer had a SAVE_OFFER line, but none of its records was returned and cited. */
+  offer_dropped: boolean;
   question_sha256: string;
   answer_sha256: string | null;
   /** Why the model call failed: the error's name, HTTP status and message (never the user's text). */
@@ -102,6 +118,14 @@ export interface TurnInput {
 const LIMIT_TEXT =
   'This turn reached its time or output limit before the answer was complete. The records found so far are listed below; ask again, or narrow the question.';
 const sha = (text: string) => createHash('sha256').update(text).digest('hex').slice(0, 16);
+/** Said when an answer's SAVE_OFFER line kept nothing, so it shows no Save button. */
+const OFFER_DROPPED_ASSUMPTION = 'To save these, say "save … as leads".';
+/**
+ * Said instead of a reply that called no tool and cited records it did not look up, typically a
+ * "yes" to an earlier answer: that text stays withheld, and this one claims nothing about the data.
+ */
+const UNCHECKED_REPLY_TEXT =
+  'To save records from an earlier answer, press the Save button under it, or say "save … as leads". To see records again, ask about them.';
 
 /** A model failure for the log: its name, HTTP status and message, cut to 300 characters. */
 export function describeModelError(error: unknown): string {
@@ -146,6 +170,7 @@ export async function runTurn(deps: TurnDeps, input: TurnInput): Promise<TurnRes
     input.messages.filter((message) => message.role === 'user').map((message) => message.content),
     input.mapCenter,
   );
+  const saveRequested = asksToSaveLeads(input.messages);
   const { tools, records, used, leadsCreated, notes } = buildTurnTools({
     pipeline: deps.pipeline,
     leads: deps.leads,
@@ -153,7 +178,7 @@ export async function runTurn(deps: TurnDeps, input: TurnInput): Promise<TurnRes
     meta,
     evidence,
     guard,
-    saveRequested: asksToSaveLeads(input.messages),
+    saveRequested,
     remainingMs: () => budget.remainingMs(),
     log: deps.logToolCall ?? (() => undefined),
   });
@@ -168,6 +193,7 @@ export async function runTurn(deps: TurnDeps, input: TurnInput): Promise<TurnRes
       { role: 'system', content: pinInstruction(input.mapCenter) },
     ],
     tools,
+    activeTools: offeredToolNames(tools, saveRequested),
     stopWhen: isStepCount(limits.maxSteps),
     maxRetries: 0,
     providerOptions: {
@@ -226,6 +252,9 @@ export async function runTurn(deps: TurnDeps, input: TurnInput): Promise<TurnRes
 
   const totals = budget.totals();
   const modelError = failure === null ? null : describeModelError(failure);
+  // Set from the answer's SAVE_OFFER line once the answer has passed the checks below.
+  let saveOffer: ChatOfferedLead[] = [];
+  let offerDropped = false;
   const stats = (
     outcome: ChatOutcome,
     answer: string | null,
@@ -249,6 +278,8 @@ export async function runTurn(deps: TurnDeps, input: TurnInput): Promise<TurnRes
     evidence: evidence.items.length,
     cited,
     leads_created: leadsCreated.length,
+    save_offer: saveOffer.length,
+    offer_dropped: offerDropped,
     question_sha256: sha(question),
     answer_sha256: answer ? sha(answer) : null,
     model_error: modelError,
@@ -291,6 +322,7 @@ export async function runTurn(deps: TurnDeps, input: TurnInput): Promise<TurnRes
       limitations: turnLimitations(meta, evidence),
       center_used: centerUsed(used, input.mapCenter),
       leads_created: leadsCreated,
+      save_offer: saveOffer,
       run_id: meta.run.run_id,
       model_id: deps.modelId,
       prompt_version: PROMPT_VERSION,
@@ -310,13 +342,10 @@ export async function runTurn(deps: TurnDeps, input: TurnInput): Promise<TurnRes
   // The model's assumption lines are model text too: checked with the answer.
   const check = checkCitations([...modelAssumptions, answer].join('\n'), evidence);
   if (!check.ok) {
-    return respond(
-      'tool_error',
-      '',
-      [],
-      0,
-      check.failures.map((item) => item.reason),
-    );
+    const reasons = check.failures.map((item) => item.reason);
+    if (records.length === 0)
+      return respond('needs_clarification', UNCHECKED_REPLY_TEXT, [], 0, reasons);
+    return respond('tool_error', '', [], 0, reasons);
   }
   const okCalls = records.filter((record) => record.status === 'ok').length;
   const asks = check.cited.length === 0 && answer.includes('?');
@@ -329,6 +358,13 @@ export async function runTurn(deps: TurnDeps, input: TurnInput): Promise<TurnRes
   }
   if (outcome === 'answered' && check.cited.length === 0 && evidence.items.length === 0) {
     outcome = 'no_matches';
+  }
+  // The records the answer offers to save: on its SAVE_OFFER line, returned by a tool in this turn
+  // and cited in the answer, at most 5. The page saves them with its Save button.
+  if (parsed.saveOffer) {
+    saveOffer = offeredLeads(parsed.saveOffer, evidence, check.cited);
+    offerDropped = saveOffer.length === 0;
+    if (offerDropped) assumptions.push(OFFER_DROPPED_ASSUMPTION);
   }
   return respond(outcome, answer, modelAssumptions, check.cited.length);
 }

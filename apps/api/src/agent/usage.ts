@@ -1,5 +1,6 @@
 import { ConditionalCheckFailedException } from '@aws-sdk/client-dynamodb';
 import { UpdateCommand, type DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
+import { DAILY_LIMITS } from '../config';
 import { TABLE_KEYS } from '../leads/repository';
 
 /**
@@ -9,8 +10,6 @@ import { TABLE_KEYS } from '../leads/repository';
  * no workspace can read or write it through the lead procedures.
  */
 export const USAGE_PARTITION = '#agent-usage';
-
-export const DAILY_LIMITS = { turns: 200, tokens: 2_000_000 } as const;
 
 export interface DailyUsage {
   /** Counts one turn; false when the day's turns or tokens are used up (nothing counted then). */

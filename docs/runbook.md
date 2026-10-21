@@ -73,6 +73,18 @@ invoke it), CDK lists them and asks: answer `y`.
 whose "Confirm subscription" link starts the notifications. The address goes to SNS with the AWS CLI: never in git, the
 template or the logs. Later deploys find the subscription and leave it alone.
 
+**PagerDuty.** To page on alarms, create a PagerDuty service with an Amazon CloudWatch integration and store its
+integration URL once:
+
+```sh
+aws ssm put-parameter --region us-east-2 --type String \
+  --name /roofing-crm/pagerduty/integration-url --value '<integration URL>'
+```
+
+Each deploy then checks the alarm topic: if that URL is not subscribed, the script subscribes it over HTTPS with the AWS
+CLI, through a file only the operator can read, and PagerDuty confirms the subscription itself. Every alarm opens an
+incident on ALARM and resolves it on OK. Without the parameter the deploy says so and the alarms email only.
+
 ## Deployed basemap
 
 - Built on 2026-10-17 into the git-ignored `basemap/` of the working tree and deployed with the app: Protomaps build
@@ -146,7 +158,7 @@ secret also leaves the agent untraced. Chat answers either way.
 
 - **Model.** `us.anthropic.claude-sonnet-4-6` (US cross-region profile; the account denies newer Claude models). Another
   enabled profile: `-c bedrockModelId=<profile id>` on the deploy's `cdk deploy` (scripts/deploy.ts).
-- **Daily budget.** 200 turns and 2,000,000 tokens per UTC day, then 503 `budget_exhausted` until 00:00 UTC. The count is
+- **Daily budget.** 500 turns and 5,000,000 tokens per UTC day, then 503 `budget_exhausted` until 00:00 UTC. The count is
   the leads table item with `workspace_id` `#agent-usage` and `lead_key` the UTC date; deleting that item resets the day.
   The function's environment `AGENT_DAILY_TURNS` and `AGENT_DAILY_TOKENS` override the caps.
 - **Golden set.** `fixtures/agent/golden.json`, 13 cases (questions and expected tool calls, never prose). In-process, with

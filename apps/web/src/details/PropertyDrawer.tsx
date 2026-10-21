@@ -25,7 +25,7 @@ import {
 
 export interface PropertyDrawerProps {
   loader: PropertyDetailLoader;
-  /** The list row of the open property, when it is in the results: its match reasons and distance. */
+  /** The list row of the open property, when it is in the results: match reasons, miles from the pin. */
   summary: PropertySummary | undefined;
   onClose: () => void;
   /** Saving the property or one of its permits as a lead; null without the CRM API. */
@@ -71,8 +71,8 @@ export function PropertyDrawer({
   }, [open]);
 
   if (state.status === 'closed') return null;
-  // The last save is shown here when it was about this property.
-  const report = leads?.lastSave;
+  // The last save is shown here when it was about this property and made on the map.
+  const report = leads?.lastSave?.origin === 'map' ? leads.lastSave : null;
   const address =
     state.status === 'ready'
       ? formatAddress(state.detail.address)
@@ -161,7 +161,7 @@ function Detail({
             </>
           ) : null}
           {summary?.distance_miles !== null && summary?.distance_miles !== undefined
-            ? ` · ${formatMiles(summary.distance_miles)} from the center`
+            ? ` · ${formatMiles(summary.distance_miles)} from the map's pin`
             : null}
         </p>
         {summary?.match_reasons && summary.match_reasons.length > 0 ? (

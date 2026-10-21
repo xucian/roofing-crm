@@ -9,6 +9,7 @@ import {
 } from '@roofing-crm/pipeline-client';
 import {
   LeadSchema,
+  isRoofJobLead,
   leadKey,
   matchesLeadFilter,
   type CreateLeadResult,
@@ -90,6 +91,19 @@ interface Ref {
 
 const DIMENSIONS = { operation: 'create' } as const;
 
+/** The permits a property embeds; the permit search reads as many when the list is truncated. */
+const EMBEDDED_PERMITS = 50;
+
+/**
+ * The permit a property lead keeps: its longest-open roof job with no completed date (the long-open
+ * lead rule, `isRoofJobLead`), else its longest-open open or stalled roofing permit.
+ */
+function leadPermit(permits: readonly PermitSummary[]): PermitSummary | null {
+  return (
+    longestOpenRoofingPermit(permits.filter(isRoofJobLead)) ?? longestOpenRoofingPermit(permits)
+  );
+}
+
 /** What a log line may say about a filter: its fields, never the point of a radius (a GPS fix). */
 export function describeFilter(filter: LeadFilter | undefined): Record<string, unknown> | null {
   if (!filter) return null;
@@ -115,16 +129,16 @@ export function createLeadService(deps: LeadServiceDeps): LeadService {
     return run;
   };
 
-  // Only the first 50 permits are embedded, unordered: past that, the permit search, whose order is
-  // the contract's, finds the property's longest-open open or stalled roofing permit.
+  // Only the first 50 permits are embedded, unordered: past that, the permit search lists the
+  // property's open and stalled roofing permits in the contract's order, and the same rule picks.
   const searchedLeadPermit = async (propertyId: string): Promise<PermitSummary | null> => {
     const { data } = await deps.pipeline.searchPermits({
       property_id: propertyId,
       status_group: ['open', 'stalled'],
       roofing_only: true,
-      limit: 1,
+      limit: EMBEDDED_PERMITS,
     });
-    return data.items[0] ?? null;
+    return leadPermit(data.items);
   };
 
   const readSnapshot = async (ref: Ref): Promise<LeadSnapshot> => {
@@ -151,7 +165,7 @@ export function createLeadService(deps: LeadServiceDeps): LeadService {
     const { data: property } = await deps.pipeline.getProperty(ref.property_id);
     const lead = property.permits_truncated
       ? await searchedLeadPermit(property.property_id)
-      : longestOpenRoofingPermit(property.permits);
+      : leadPermit(property.permits);
     return buildSnapshot({
       property,
       permit: lead ? permitSnapshot(lead, 'longest_open') : null,

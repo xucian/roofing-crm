@@ -1,5 +1,12 @@
 import { normalizePipelineApiBase } from '@roofing-crm/shared';
 
+/**
+ * The agent's daily budget (docs/decisions.md §3): turns and model tokens per UTC day. The stack sets
+ * AGENT_DAILY_TURNS and AGENT_DAILY_TOKENS from it, and its usage alarm fires at three quarters of
+ * the tokens, so one value drives the caps and the alarm.
+ */
+export const DAILY_LIMITS = { turns: 500, tokens: 5_000_000 } as const;
+
 /** What the stack hands the `leads` function (apps/api/cdk/lib/leads-api.ts). */
 export interface ApiConfig {
   /** The DynamoDB table of leads. */

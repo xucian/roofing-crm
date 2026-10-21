@@ -78,7 +78,9 @@ function Results({
   const { view, state, loadMore, retry: searchAgain } = search;
   const [ticked, setTicked] = useState<ReadonlyMap<string, LeadTarget>>(new Map());
   const reportRef = useRef<HTMLDivElement>(null);
-  const reportId = leads?.lastSave?.id;
+  // A save from an answer's Save button reports under that answer, not here.
+  const report = leads?.lastSave?.origin === 'map' ? leads.lastSave : null;
+  const reportId = report?.id;
 
   // A save started far down the list reports at the top of the panel: bring it into view, so a row
   // that failed is not missed.
@@ -123,13 +125,8 @@ function Results({
   return (
     <>
       <div ref={reportRef} className="save-report-anchor">
-        {leads?.lastSave ? (
-          <SaveReport
-            key={leads.lastSave.id}
-            report={leads.lastSave}
-            leads={leads}
-            onShowLeads={onShowLeads}
-          />
+        {leads && report ? (
+          <SaveReport key={report.id} report={report} leads={leads} onShowLeads={onShowLeads} />
         ) : null}
       </div>
       {retry ? (

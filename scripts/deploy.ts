@@ -6,8 +6,8 @@
 // secret); PIPELINE_API_BASE in the environment overrides it. From .env only LANGSMITH_API_KEY is
 // read. Steps: refuse without the pinned pipeline contract -> check that the API serves that contract
 // -> show the AWS identity and region -> check the CDK bootstrap -> check the basemap -> write the
-// LangSmith key to Secrets Manager -> build -> cdk deploy -> subscribe an email to the alarm topic
-// once -> print the URL, the F1 link and the API's resources.
+// LangSmith key to Secrets Manager -> build -> cdk deploy -> subscribe an email, and PagerDuty when
+// configured, to the alarm topic once -> print the URL, the F1 link and the API's resources.
 //
 // The LangSmith key (F5) goes from .env to the secret `pidgeot-agent/langsmith-api-key` with the AWS
 // CLI, through a file only this user can read, so it is in neither argv, the template, git nor the
@@ -17,6 +17,11 @@
 // The alarm email is the operator's, so it stays out of git and out of the template: ALERT_EMAIL, or
 // a prompt the first time, subscribes it with the AWS CLI. Later deploys find the subscription and
 // leave it alone.
+//
+// PagerDuty the same way: the integration URL of a PagerDuty service's Amazon CloudWatch integration
+// holds its key, so it lives in the SSM parameter `/roofing-crm/pagerduty/integration-url`, set by the
+// operator, and goes to the AWS CLI through a file only this user can read. Without the parameter the
+// alarms notify by email only.
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -146,6 +151,65 @@ async function ensureAlertEmail(topicArn: string, interactive: boolean): Promise
     'text',
   ]);
   console.log('AWS has sent a confirmation email: open it and click "Confirm subscription".');
+}
+
+export const PAGERDUTY_PARAMETER = '/roofing-crm/pagerduty/integration-url';
+
+/** One HTTPS subscription of the alarm topic to PagerDuty, when the operator set the parameter. */
+function ensurePagerDuty(topicArn: string): void {
+  const url = capture('aws', [
+    'ssm',
+    'get-parameter',
+    '--name',
+    PAGERDUTY_PARAMETER,
+    '--region',
+    REGION,
+    '--query',
+    'Parameter.Value',
+    '--output',
+    'text',
+  ]);
+  if (url === null) {
+    console.log(`No PagerDuty route: ${PAGERDUTY_PARAMETER} is not set, so the alarms email only.`);
+    return;
+  }
+  if (!/^https:\/\/events\.pagerduty\.com\/integration\/[0-9a-f]+\/enqueue$/.test(url)) {
+    fail(`${PAGERDUTY_PARAMETER} is not a PagerDuty Amazon CloudWatch integration URL.`);
+  }
+  const listed = capture('aws', [
+    'sns',
+    'list-subscriptions-by-topic',
+    '--topic-arn',
+    topicArn,
+    '--region',
+    REGION,
+    '--output',
+    'json',
+  ]);
+  if (listed === null) {
+    console.log(`Could not list the subscriptions of ${topicArn}; PagerDuty left as it is.`);
+    return;
+  }
+  const subscribed = (JSON.parse(listed) as { Subscriptions: Subscription[] }).Subscriptions.some(
+    (subscription) => subscription.Protocol === 'https' && subscription.Endpoint === url,
+  );
+  if (subscribed) {
+    console.log('PagerDuty: the alarm topic is subscribed.');
+    return;
+  }
+  const dir = mkdtempSync(join(tmpdir(), 'roofing-crm-'));
+  const file = join(dir, 'subscribe.json');
+  try {
+    writeFileSync(file, JSON.stringify({ TopicArn: topicArn, Protocol: 'https', Endpoint: url }), {
+      mode: 0o600,
+    });
+    run('aws', ['sns', 'subscribe', '--cli-input-json', `file://${file}`, '--region', REGION], {
+      stdio: ['ignore', 'ignore', 'inherit'],
+    });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+  console.log('PagerDuty: subscribed the alarm topic; PagerDuty confirms the subscription itself.');
 }
 
 /** LANGSMITH_API_KEY from the environment or .env; nothing else is read from .env. */
@@ -319,7 +383,10 @@ async function main(): Promise<void> {
   )[STACK];
   const webUrl = outputs?.WebUrl;
   if (!webUrl) fail(`Deployed, but ${OUTPUTS_FILE} has no WebUrl output.`);
-  if (outputs.AlertsTopicArn) await ensureAlertEmail(outputs.AlertsTopicArn, !values.yes);
+  if (outputs.AlertsTopicArn) {
+    await ensureAlertEmail(outputs.AlertsTopicArn, !values.yes);
+    ensurePagerDuty(outputs.AlertsTopicArn);
+  }
 
   const link = `${webUrl}/?lat=${DEFAULT_CENTER.lat.toFixed(5)}&lon=${DEFAULT_CENTER.lon.toFixed(5)}&radius=${String(RADIUS_MILES.default)}&age=${String(ROOF_AGE_THRESHOLD_YEARS.default)}`;
   console.log(`\nDeployed build ${commit}.`);

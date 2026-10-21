@@ -35,7 +35,7 @@ export type LeadsView =
 /** The leads `leads.list` returned for the Leads page's filters; `off` without filters. */
 export type FilteredLeadsView =
   | { status: 'off' }
-  | { status: 'loading'; previous: Lead[] | null }
+  | { status: 'loading' }
   | {
       status: 'ready';
       leads: Lead[];
@@ -68,9 +68,13 @@ export interface LeadsNotice {
   requestId: string | null;
 }
 
+/** Where a save started, so only that page reports it: the map (its list or drawer) or an answer. */
+export type SaveOrigin = 'map' | 'assistant';
+
 export interface SaveReport {
   /** Increases with every save, so the panel can tell reports apart. */
   id: number;
+  origin: SaveOrigin;
   created: LeadTarget[];
   existing: LeadTarget[];
   failed: { target: LeadTarget; failure: LeadFailure }[];
@@ -90,7 +94,7 @@ export interface LeadsStore {
   /** `leadKey`s in a save that has not answered yet. */
   savingKeys: ReadonlySet<string>;
   lastSave: SaveReport | null;
-  save: (targets: LeadTarget[]) => void;
+  save: (targets: LeadTarget[], origin?: SaveOrigin) => void;
   dismissSave: () => void;
   reload: () => void;
   /** The filtered list, when the page asked for one. */
@@ -211,16 +215,13 @@ export function useLeads(
     };
   }, [client, workspace.id, filterKey, filterAttempt]);
 
-  // The previous answer stays on the page while the next one loads.
+  // While a read is pending no list shows, so the page's count and its cards are always one answer.
   const filtered: FilteredLeadsView =
     filterKey === null
       ? { status: 'off' }
       : answer?.key === filterKey && answer.attempt === filterAttempt
         ? answer.view
-        : {
-            status: 'loading',
-            previous: answer?.view.status === 'ready' ? answer.view.leads : null,
-          };
+        : { status: 'loading' };
 
   /** Applies a change to every list on the page: the whole one and the filtered one. */
   const patchLists = useCallback((change: (leads: Lead[]) => Lead[]): void => {
@@ -301,9 +302,10 @@ export function useLeads(
   );
 
   const run = useCallback(
-    async (targets: LeadTarget[]): Promise<SaveReport> => {
+    async (targets: LeadTarget[], origin: SaveOrigin): Promise<SaveReport> => {
       const report: SaveReport = {
         id: (reports.current += 1),
+        origin,
         created: [],
         existing: [],
         failed: [],
@@ -363,12 +365,12 @@ export function useLeads(
   );
 
   const save = useCallback(
-    (targets: LeadTarget[]): void => {
+    (targets: LeadTarget[], origin: SaveOrigin = 'map'): void => {
       if (targets.length === 0) return;
       const keys = targets.map((target) => leadKey(target));
       setSaving((current) => new Set([...current, ...keys]));
       queue.current = queue.current.then(async () => {
-        const report = await run(targets);
+        const report = await run(targets, origin);
         setLastSave(report);
         setSaving((current) => {
           const next = new Set(current);

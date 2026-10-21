@@ -1,5 +1,5 @@
 {
-  "description": "Golden questions for pidgeot-agent (alakazam review item 7). Expectations are tool calls, their parameters, outcomes and the miss and save rules, never prose. Run with `pnpm agent:golden` (in-process, live pipeline and Bedrock) or `pnpm agent:golden --url <WebUrl>` (the deployed agent). Cases run in order in one workspace: the lead cases rely on the save cases before them, and `history_from` sends an earlier case's question and answer as the conversation before the question.",
+  "description": "Golden questions for pidgeot-agent (alakazam review item 7). Expectations are tool calls, their parameters, outcomes, the server's assumption lines and the miss and save rules, never the model's prose. Run with `pnpm agent:golden` (in-process, live pipeline and Bedrock) or `pnpm agent:golden --url <WebUrl>` (the deployed agent). Cases run in order in one workspace: the lead cases rely on the save cases before them, `history_from` sends an earlier case's question and answer as the conversation before the question, and `history` sends the messages written in the case. `save_offer_min` asks for that many records in the answer's `save_offer`; in every case an answer never shows SAVE_OFFER text and every offered record is cited in it.",
   "map_center": {
     "lat": 30.2672,
     "lon": -97.7431
@@ -14,13 +14,33 @@
         "search_permits": {
           "radius_miles": 5,
           "min_open_years": 5,
-          "roofing_only": true
+          "roofing_only": true,
+          "roof_work_class": ["primary_roof_replacement", "repair_or_coating"]
         }
       },
       "forbid_tools": ["search_properties"],
       "min_evidence": {
         "permit": 1
-      }
+      },
+      "assumption_mentions": "roof jobs only"
+    },
+    {
+      "id": "widen-all-roofing-classes",
+      "question": "Show me open roofing permits older than five years within five miles of Austin in every roofing class, sheds and new construction included",
+      "outcomes": ["answered", "no_matches"],
+      "tools_in_order": ["resolve_search_center", "search_permits"],
+      "params": {
+        "search_permits": {
+          "min_open_years": 5,
+          "roof_work_class": [
+            "primary_roof_replacement",
+            "primary_roof_new_construction",
+            "repair_or_coating",
+            "accessory_roof"
+          ]
+        }
+      },
+      "assumption_mentions": "roof_work_class primary_roof_replacement, primary_roof_new_construction, repair_or_coating, accessory_roof"
     },
     {
       "id": "aged-roofs-near-pin",
@@ -97,6 +117,42 @@
       "outcomes": ["answered"],
       "tools_in_order": ["create_lead"],
       "leads_created_at_least": 1
+    },
+    {
+      "id": "offer-to-save",
+      "question": "Find the longest-open roofing permit within 2 miles of Austin and offer to save it as a lead",
+      "outcomes": ["answered"],
+      "tools_in_order": ["resolve_search_center", "search_permits"],
+      "forbid_tools": ["create_lead"],
+      "save_offer_min": 1
+    },
+    {
+      "id": "offer-then-yes",
+      "history_from": "offer-to-save",
+      "question": "yes",
+      "outcomes": ["answered", "needs_clarification"],
+      "forbid_tools": ["create_lead"]
+    },
+    {
+      "id": "offer-then-manor",
+      "history_from": "offer-to-save",
+      "question": "Please show me open roofing permits in Manor instead",
+      "outcomes": ["answered", "no_matches"],
+      "tools_in_order": ["resolve_search_center", "search_permits"],
+      "forbid_tools": ["create_lead"]
+    },
+    {
+      "id": "yes-without-offer",
+      "history": [
+        { "role": "user", "content": "Find long-open roofing permits near Austin" },
+        {
+          "role": "assistant",
+          "content": "Two permits match; no leads were saved. To save one, say \"save … as a lead\". Shall I widen the search to 10 miles?"
+        }
+      ],
+      "question": "yes",
+      "outcomes": ["answered", "no_matches", "needs_clarification"],
+      "forbid_tools": ["create_lead"]
     },
     {
       "id": "list-leads",

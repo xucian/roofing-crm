@@ -18,7 +18,7 @@ per request: a 25-row save writes a few records, not one per row.
 | `ChatTurn` | Count | `outcome` = `answered`, `no_matches`, `needs_clarification`, `out_of_scope`, `out_of_county`, `limit_reached` or `tool_error` | Per agent turn that reached the model | — |
 | `ChatFailed` | Count | `reason` = `tool_error`, `model_unavailable`, `pipeline` or `internal` | Per turn the user got no answer from | `ChatFailed`: ≥ 3 in 5 minutes |
 | `ChatRefused` | Count | `reason` = `budget_exhausted` or `circuit_open` | Per turn refused before the model (503) | — |
-| `ChatInputTokens`, `ChatOutputTokens` | Count | — | Model tokens per turn (input includes cache reads) | `ChatDailyTokens`: input + output ≥ 1,500,000 in a day |
+| `ChatInputTokens`, `ChatOutputTokens` | Count | — | Model tokens per turn (input includes cache reads) | `ChatDailyTokens`: input + output ≥ 3,750,000 in a day |
 | `ChatCacheReadTokens` | Count | — | Input tokens read from the Bedrock prompt cache | — |
 | `ChatToolCalls` | Count | — | Tool calls per turn | — |
 | `ChatTurnLatency` | Milliseconds | — | From API Gateway's receipt to the answer | — |
@@ -29,7 +29,7 @@ AWS metrics the stack alarms on:
 | Alarm | Metric | Threshold |
 | --- | --- | --- |
 | `FunctionErrors` | `AWS/Lambda` `Errors` of the `leads` function | ≥ 1 in 5 minutes |
-| `FunctionThrottles` | `AWS/Lambda` `Throttles` of the `leads` function, which reserves 10 executions | ≥ 1 in 5 minutes |
+| `FunctionThrottles` | `AWS/Lambda` `Throttles` of the `leads` function, which reserves 25 executions | ≥ 1 in 5 minutes |
 | `AgentErrors` | `AWS/Lambda` `Errors` of the `agent` function | ≥ 1 in 5 minutes |
 | `AgentThrottles` | `AWS/Lambda` `Throttles` of the `agent` function, which reserves 5 executions | ≥ 1 in 5 minutes |
 | `Api5xx` | `AWS/ApiGateway` `5xx` of the CRM HTTP API | ≥ 1 in 5 minutes |

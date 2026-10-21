@@ -28,6 +28,13 @@ export {
 export type { GeoBounds, GeoPoint, PolygonGeometry } from './geo';
 export { PERMISSIONS_POLICY, contentSecurityPolicy, normalizePipelineApiBase } from './hosting';
 export type { ContentSecurityPolicyOptions } from './hosting';
+export {
+  ROOF_JOB_CLASSES,
+  callablePhone,
+  hasCompletionConflict,
+  isLongOpenLead,
+  isRoofJobLead,
+} from './permits';
 export { DISABLED_SECTIONS } from './sections';
 export type { DisabledSection } from './sections';
 export {
@@ -104,6 +111,7 @@ export type {
   ChatLeadCreated,
   ChatLimitation,
   ChatMessage,
+  ChatOfferedLead,
   ChatOutcome,
   ChatResponse,
   ChatToolCall,

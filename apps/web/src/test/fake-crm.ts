@@ -70,6 +70,7 @@ export function fixtureChatResponse(
     ],
     center_used: { name: 'AUSTIN', kind: 'city', lat: 30.2672, lon: -97.7431 },
     leads_created: [],
+    save_offer: [],
     run_id: 'fixture-run',
     model_id: 'us.anthropic.claude-sonnet-4-6',
     prompt_version: 'pidgeot-agent.prompt.test',

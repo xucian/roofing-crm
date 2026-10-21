@@ -11,7 +11,10 @@ import {
   LeadFilterSchema,
   PropertyIdSchema,
   RADIUS_MILES,
+  ROOF_JOB_CLASSES,
+  leadKey,
   type ChatLeadCreated,
+  type ChatOfferedLead,
 } from '@roofing-crm/shared';
 import { tool, type ToolSet } from 'ai';
 import { z } from 'zod';
@@ -80,6 +83,15 @@ const radius = z
   .default(RADIUS_MILES.default)
   .describe('Great-circle miles, 0.1 to 25, default 5.');
 const statusGroup = z.enum(['open', 'stalled', 'closed', 'needs_review']);
+/** The contract's roof work classes, in its order; the first four are the roofing set. */
+const roofWorkClass = z.enum([
+  'primary_roof_replacement',
+  'primary_roof_new_construction',
+  'repair_or_coating',
+  'accessory_roof',
+  'other',
+  'needs_review',
+]);
 
 const INPUTS = {
   resolve_search_center: z.object({
@@ -117,32 +129,58 @@ const INPUTS = {
   get_property: z.object({
     property_id: PropertyIdSchema.describe('TCAD PROP_ID as printed.'),
   }),
-  search_permits: z.object({
-    lat,
-    lon,
-    radius_miles: radius,
-    status_group: z
-      .array(statusGroup)
-      .min(1)
-      .default(['open', 'stalled'])
-      .describe('Status groups to include, default open and stalled.'),
-    roofing_only: z
-      .boolean()
-      .default(true)
-      .describe('Only permits whose roof_work_class is in the roofing set.'),
-    min_open_years: z
-      .number()
-      .min(0)
-      .optional()
-      .describe('Only permits open at least this many years (open_duration_days).'),
-    contractor_attribution_key: z
-      .string()
-      .optional()
-      .describe('Permits grouped under one printed contractor name and phone.'),
-    property_id: z.string().optional().describe('All permits of one property.'),
-    limit,
-    cursor,
-  }),
+  search_permits: z
+    .object({
+      lat,
+      lon,
+      radius_miles: radius,
+      status_group: z
+        .array(statusGroup)
+        .min(1)
+        .default(['open', 'stalled'])
+        .describe('Status groups to include, default open and stalled.'),
+      roofing_only: z
+        .boolean()
+        .default(true)
+        .describe('Only permits whose roof_work_class is in the roofing set.'),
+      roof_work_class: z
+        .array(roofWorkClass)
+        .min(1)
+        .optional()
+        .describe(
+          'Restrict to these roof work classes. Left out on an area search for open or stalled roofing permits, roof jobs only: primary_roof_replacement and repair_or_coating. Every roofing class: primary_roof_replacement, primary_roof_new_construction, repair_or_coating, accessory_roof.',
+        ),
+      min_open_years: z
+        .number()
+        .min(0)
+        .optional()
+        .describe('Only permits open at least this many years (open_duration_days).'),
+      contractor_attribution_key: z
+        .string()
+        .optional()
+        .describe('Permits grouped under one printed contractor name and phone.'),
+      property_id: z.string().optional().describe('All permits of one property.'),
+      limit,
+      cursor,
+    })
+    // Leads are roof jobs: a search for open or stalled roofing permits by area keeps them unless the
+    // model names classes; one property's or one contractor's permits keep every class. Named
+    // classes are put in the contract's order, so the recorded call is the same however they came.
+    .transform(({ roof_work_class: named, ...input }) => {
+      const searchesLeads =
+        input.roofing_only &&
+        input.property_id === undefined &&
+        input.contractor_attribution_key === undefined &&
+        input.status_group.every((group) => group === 'open' || group === 'stalled');
+      return {
+        ...input,
+        roof_work_class: named
+          ? roofWorkClass.options.filter((value) => named.includes(value))
+          : searchesLeads
+            ? [...ROOF_JOB_CLASSES]
+            : undefined,
+      };
+    }),
   search_permit_text: z.object({
     q: z
       .string()
@@ -184,8 +222,14 @@ const INPUTS = {
   }),
 } as const;
 
+type ToolName = keyof typeof INPUTS;
+/** Each tool's input as its schema parses it, defaults applied. */
+type ToolInputs = { [N in ToolName]: z.output<(typeof INPUTS)[N]> };
+/** The schemas by tool, so one generic registration hands each tool its own input type. */
+const SCHEMAS: { [N in ToolName]: z.ZodType<ToolInputs[N]> } = INPUTS;
+
 /** The pipeline MCP registry's frozen descriptions, plus the CRM's lead tools. */
-const DESCRIPTIONS: Readonly<Record<keyof typeof INPUTS, string>> = {
+const DESCRIPTIONS: Readonly<Record<ToolName, string>> = {
   resolve_search_center:
     'Resolve a Travis County city, alias or ZIP to a centroid. Call it first when a question names a place; never pass coordinates it did not return or the user did not type.',
   search_properties:
@@ -205,34 +249,57 @@ const DESCRIPTIONS: Readonly<Record<keyof typeof INPUTS, string>> = {
     "Save a property, or one of its permits, as a lead in the user's workspace (the CRM reads its snapshot from the pipeline). Only when the user explicitly asks to save in this message, and only with ids a tool returned in this turn. Saving one twice returns the existing lead.",
 };
 
-const GUARDED = new Set(['search_properties', 'search_permits', 'search_permit_text']);
-
-const SAVE_VERB = /\b(save|add|create|store|put|bookmark|track)\b/i;
+/** Verbs that save on their own: "save the first two", "bookmark it". */
+const SAVE_VERB = /\b(save|bookmark)\b/i;
 /** What a save points at: leads, the CRM, or the results ("them", "the first two", "both"). */
 const SAVE_OBJECT =
   /\b(leads?|crm|them|these|those|it|this|that|all|both|each|first|second|third|top|last|\d+)\b/i;
+/** Verbs that save only with leads, the CRM or the user's list: "add them to my list", not "add 2 miles". */
+const LIST_VERB = /\b(add|create|put|store|track)\b/i;
+const LIST_OBJECT = /\b(leads?|crm|my list)\b/i;
 const NEGATED =
   /\b(don'?t|do not|never|no need to|without|not)\s+(?:\w+\s+){0,3}?(save|add|create|store|put|bookmark|track)\b/i;
-const AFFIRMATIVE = /^\s*(yes|yep|yeah|sure|ok|okay|please(?: do)?|do it|go ahead|go for it)\b/i;
 
 /**
- * Whether the user asked to save leads in the latest message: a verb of saving pointing at leads or
- * at the results ("save the first two", "add them to my leads"), not negated; or a "yes" to the
- * assistant's own offer to save them in the message before (alakazam F5 review item 4).
+ * Whether the user asked to save leads in the latest message, not negated: "save" or "bookmark"
+ * pointing at leads or at the results ("save the first two"), or "add", "create", "put", "store" or
+ * "track" with leads, the CRM or "my list" ("add them to my list"; alakazam review finding 3). A
+ * bare "yes" is never an ask: the page's Save button saves what an answer offers.
  */
 export function asksToSaveLeads(messages: readonly { role: string; content: string }[]): boolean {
   const latest = messages.at(-1);
   if (latest?.role !== 'user') return false;
   const text = latest.content;
   if (NEGATED.test(text)) return false;
-  if (SAVE_VERB.test(text) && SAVE_OBJECT.test(text)) return true;
-  const offer = messages.at(-2);
   return (
-    AFFIRMATIVE.test(text) &&
-    offer?.role === 'assistant' &&
-    /\bsave\b/i.test(offer.content) &&
-    /\blead/i.test(offer.content)
+    (SAVE_VERB.test(text) && SAVE_OBJECT.test(text)) ||
+    (LIST_VERB.test(text) && LIST_OBJECT.test(text))
   );
+}
+
+/**
+ * The records an answer's SAVE_OFFER line offers, kept when a tool returned them in this turn and
+ * the answer cites them: a property, or a pipeline permit with its property. At most
+ * MAX_LEADS_PER_TURN; the page saves them with its Save button.
+ */
+export function offeredLeads(
+  tokens: readonly { kind: string; id: string }[],
+  evidence: EvidenceCollector,
+  cited: readonly { kind: string; id: string }[],
+): ChatOfferedLead[] {
+  const leads = new Map<string, ChatOfferedLead>();
+  for (const { kind, id } of tokens) {
+    if (!cited.some((token) => token.kind === kind && token.id === id)) continue;
+    let lead: ChatOfferedLead | null = null;
+    if (kind === 'property' && evidence.has('property', id)) {
+      lead = { property_id: id, permit_id: '' };
+    } else if (kind === 'permit') {
+      const permit = evidence.items.find((item) => item.kind === 'permit' && item.permit_id === id);
+      if (permit?.property_id) lead = { property_id: permit.property_id, permit_id: id };
+    }
+    if (lead) leads.set(leadKey(lead), lead);
+  }
+  return [...leads.values()].slice(0, MAX_LEADS_PER_TURN);
 }
 
 /** Drops a trailing Texas suffix ("Pflugerville, TX"): search centers are Travis County names. */
@@ -254,12 +321,11 @@ export interface TurnToolsOptions {
   log: (record: ToolCallRecord) => void;
 }
 
-export interface TurnTools {
-  tools: ToolSet;
-  records: ToolCallRecord[];
-  used: { centers: CenterPoint[]; pin: boolean };
-  leadsCreated: ChatLeadCreated[];
-  notes: string[];
+/** The search centers, the map's pin and the roof work classes the turn's searches used. */
+export interface ToolsUsed {
+  centers: CenterPoint[];
+  pin: boolean;
+  roofWorkClasses: string[][];
 }
 
 interface Failure {
@@ -325,9 +391,9 @@ export function propertyPermits(permits: PermitSummary[]): PermitSummary[] {
  * lead tools over the `leads` service. A failure is a result carrying the pipeline's request id, never
  * a throw. Each call is one log line: tool, parameters, counts, latency.
  */
-export function buildTurnTools(options: TurnToolsOptions): TurnTools {
+export function buildTurnTools(options: TurnToolsOptions) {
   const records: ToolCallRecord[] = [];
-  const used: TurnTools['used'] = { centers: [], pin: false };
+  const used: ToolsUsed = { centers: [], pin: false, roofWorkClasses: [] };
   const leadsCreated: ChatLeadCreated[] = [];
   const notes: string[] = [];
   const { pipeline, evidence, guard } = options;
@@ -353,16 +419,16 @@ export function buildTurnTools(options: TurnToolsOptions): TurnTools {
     returned: 0,
   });
 
-  type Run = (
-    input: Record<string, unknown>,
+  type Run<N extends ToolName> = (
+    input: ToolInputs[N],
     callId: string,
   ) => Promise<{ result: unknown; summary: string; total: number | null; returned: number | null }>;
 
-  const run: Record<keyof typeof INPUTS, Run> = {
+  const run: { [N in ToolName]: Run<N> } = {
     resolve_search_center: async (input, callId) => {
-      const q = stripStateSuffix(String(input.q));
+      const q = stripStateSuffix(input.q);
       if (q !== input.q) {
-        notes.push(`State suffix dropped from the place name: "${String(input.q)}" → "${q}".`);
+        notes.push(`State suffix dropped from the place name: "${input.q}" → "${q}".`);
       }
       const { data } = await pipeline.searchCenters(q);
       guard.addCenters(data.items);
@@ -391,7 +457,7 @@ export function buildTurnTools(options: TurnToolsOptions): TurnTools {
       };
     },
     get_property: async (input, callId) => {
-      const id = String(input.property_id);
+      const id = input.property_id;
       const answer = await lookup('property', id, () => pipeline.getProperty(id));
       if (!answer) return missingRecord('property', id);
       const { data } = answer;
@@ -406,6 +472,7 @@ export function buildTurnTools(options: TurnToolsOptions): TurnTools {
     },
     search_permits: async (input, callId) => {
       const { data } = await pipeline.searchPermits(input);
+      if (input.roof_work_class) used.roofWorkClasses.push(input.roof_work_class);
       evidence.addPermits(callId, data.items);
       return {
         result: projectPermitPage(data),
@@ -415,9 +482,7 @@ export function buildTurnTools(options: TurnToolsOptions): TurnTools {
       };
     },
     search_permit_text: async (input, callId) => {
-      const { data } = await pipeline.searchPermitText(
-        input as Parameters<PipelineClient['searchPermitText']>[0],
-      );
+      const { data } = await pipeline.searchPermitText(input);
       evidence.addPermits(callId, data.items);
       return {
         result: projectPermitPage(data),
@@ -427,7 +492,7 @@ export function buildTurnTools(options: TurnToolsOptions): TurnTools {
       };
     },
     get_permit: async (input, callId) => {
-      const id = String(input.permit_id);
+      const id = input.permit_id;
       const answer = await lookup('permit', id, () => pipeline.getPermit(id));
       if (!answer) return missingRecord('permit', id);
       const { data } = answer;
@@ -440,7 +505,7 @@ export function buildTurnTools(options: TurnToolsOptions): TurnTools {
       };
     },
     get_contractor: async (input, callId) => {
-      const id = String(input.contractor_attribution_key);
+      const id = input.contractor_attribution_key;
       const answer = await lookup('contractor', id, () => pipeline.getContractor(id));
       if (!answer) return missingRecord('contractor', id);
       const { data } = answer;
@@ -466,7 +531,7 @@ export function buildTurnTools(options: TurnToolsOptions): TurnTools {
       const page = await options.leads.list({
         workspace_id: options.workspaceId,
         limit: LEAD_LIST_PAGE.max,
-        filter: LeadFilterSchema.parse(input),
+        filter: input,
       });
       const shown = page.items.slice(0, AGENT_LIMIT.max);
       evidence.addLeads(callId, shown);
@@ -478,7 +543,7 @@ export function buildTurnTools(options: TurnToolsOptions): TurnTools {
       };
     },
     create_lead: async (input, callId) => {
-      const ref = { property_id: String(input.property_id), permit_id: String(input.permit_id) };
+      const ref = { property_id: input.property_id, permit_id: input.permit_id };
       const { outcome, lead } = await options.leads.create({
         workspace_id: options.workspaceId,
         ...ref,
@@ -494,37 +559,39 @@ export function buildTurnTools(options: TurnToolsOptions): TurnTools {
     },
   };
 
-  /** Refusals decided before any call: the search-center rule and the lead-creation rules. */
-  const refuse = (name: string, input: Record<string, unknown>): string | null => {
-    const point =
-      name === 'list_leads'
-        ? (input.within as { lat?: number; lon?: number } | undefined)
-        : GUARDED.has(name)
-          ? (input as { lat?: number; lon?: number })
-          : undefined;
-    if (point) {
-      const checked = guard.check(point.lat, point.lon);
-      if (!checked.ok) return checked.detail;
-      if (checked.center) used.centers.push(checked.center);
-      if (checked.pin) used.pin = true;
+  /** The search-center rule, for the point of a search or of a lead filter's radius. */
+  const checkPoint = (point: { lat?: number | undefined; lon?: number | undefined }) => {
+    const checked = guard.check(point.lat, point.lon);
+    if (!checked.ok) return checked.detail;
+    if (checked.center) used.centers.push(checked.center);
+    if (checked.pin) used.pin = true;
+    return null;
+  };
+
+  /** The lead-creation rules: an explicit ask in this message, the cap, ids from this turn. */
+  const checkSave = (input: ToolInputs['create_lead']) => {
+    if (!options.saveRequested) {
+      return 'not_requested: save a lead only when the user explicitly asks to save in this message; a "yes" is not one: point the user to the Save button, or ask them to say "save … as leads"';
     }
-    if (name === 'create_lead') {
-      if (!options.saveRequested) {
-        return 'not_requested: save a lead only when the user explicitly asks to save in this message';
-      }
-      if (leadsCreated.length >= MAX_LEADS_PER_TURN) {
-        return `too_many: at most ${String(MAX_LEADS_PER_TURN)} leads per message; ask the user to save the rest in another message`;
-      }
-      const propertyId = String(input.property_id);
-      const permitId = typeof input.permit_id === 'string' ? input.permit_id : '';
-      if (!evidence.has('property', propertyId)) {
-        return `unknown_id: no tool returned property ${propertyId} in this turn`;
-      }
-      if (permitId && !evidence.has('permit', permitId)) {
-        return `unknown_id: no tool returned permit ${permitId} in this turn`;
-      }
+    if (leadsCreated.length >= MAX_LEADS_PER_TURN) {
+      return `too_many: at most ${String(MAX_LEADS_PER_TURN)} leads per message; ask the user to save the rest in another message`;
+    }
+    if (!evidence.has('property', input.property_id)) {
+      return `unknown_id: no tool returned property ${input.property_id} in this turn`;
+    }
+    if (input.permit_id && !evidence.has('permit', input.permit_id)) {
+      return `unknown_id: no tool returned permit ${input.permit_id} in this turn`;
     }
     return null;
+  };
+
+  /** Refusals decided before any call: the search-center rule and the lead-creation rules. */
+  const refuse: { [N in ToolName]?: (input: ToolInputs[N]) => string | null } = {
+    search_properties: checkPoint,
+    search_permits: checkPoint,
+    search_permit_text: checkPoint,
+    list_leads: (input) => (input.within ? checkPoint(input.within) : null),
+    create_lead: checkSave,
   };
 
   // One call at a time, in the order the model made them (alakazam F5 review item 5): the AI SDK
@@ -537,14 +604,12 @@ export function buildTurnTools(options: TurnToolsOptions): TurnTools {
     return result;
   };
 
-  const tools: ToolSet = {};
-  for (const name of Object.keys(INPUTS) as (keyof typeof INPUTS)[]) {
-    // Each schema parses its own input; the shared execute below sees them as plain records.
-    const inputSchema = INPUTS[name] as unknown as z.ZodType<Record<string, unknown>>;
-    tools[name] = tool({
+  // Each tool's schema parses its input; execute receives that tool's own input type.
+  const register = <N extends ToolName>(name: N) =>
+    tool({
       description: DESCRIPTIONS[name],
-      inputSchema,
-      execute: (input: Record<string, unknown>, { toolCallId }: { toolCallId: string }) =>
+      inputSchema: SCHEMAS[name],
+      execute: (input, { toolCallId }) =>
         oneAtATime(async () => {
           const started = performance.now();
           const finish = (
@@ -567,7 +632,7 @@ export function buildTurnTools(options: TurnToolsOptions): TurnTools {
             records.push(entry);
             options.log(entry);
           };
-          const refusal = refuse(name, input);
+          const refusal = refuse[name]?.(input) ?? null;
           if (refusal !== null) {
             finish('error', refusal);
             return { error: refusal.slice(0, refusal.indexOf(':')), detail: refusal };
@@ -588,6 +653,37 @@ export function buildTurnTools(options: TurnToolsOptions): TurnTools {
           }
         }),
     });
-  }
+
+  // Registered explicitly, every tool once (build-ai-agents: no dynamic tool discovery).
+  const tools = {
+    resolve_search_center: register('resolve_search_center'),
+    search_properties: register('search_properties'),
+    get_property: register('get_property'),
+    search_permits: register('search_permits'),
+    search_permit_text: register('search_permit_text'),
+    get_permit: register('get_permit'),
+    get_contractor: register('get_contractor'),
+    get_run_summary: register('get_run_summary'),
+    list_leads: register('list_leads'),
+    create_lead: register('create_lead'),
+  } satisfies Record<ToolName, ToolSet[string]>;
   return { tools, records, used, leadsCreated, notes };
+}
+
+/** What buildTurnTools returns: the tool registry and what the turn's calls recorded. */
+export type TurnTools = ReturnType<typeof buildTurnTools>;
+/** The registry's inferred type: each tool keeps its own input type, never widened to ToolSet. */
+export type TurnToolSet = TurnTools['tools'];
+
+/**
+ * The tools the model is offered: create_lead only when the latest message asks to save, so a "yes"
+ * or a follow-up cannot even try a save; the Save button saves offered records. The SDK refuses a
+ * call to a tool it did not offer before it runs, and create_lead keeps its own check as well.
+ */
+export function offeredToolNames(
+  tools: TurnToolSet,
+  saveRequested: boolean,
+): (keyof TurnToolSet)[] {
+  const names = Object.keys(tools) as (keyof TurnToolSet)[];
+  return saveRequested ? names : names.filter((name) => name !== 'create_lead');
 }

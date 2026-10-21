@@ -1,8 +1,15 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { useReducer } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { SearchPanel } from './SearchPanel';
-import { DEFAULT_SEARCH, type SearchAction } from './search-state';
+import { DEFAULT_SEARCH, searchReducer, type SearchAction } from './search-state';
+
+/** The panel on the app's reducer, so a committed value comes back clamped as in the app. */
+function ReducedPanel() {
+  const [search, dispatch] = useReducer(searchReducer, DEFAULT_SEARCH);
+  return <SearchPanel search={search} dispatch={dispatch} locating={false} onLocate={vi.fn()} />;
+}
 
 function setup(overrides: Partial<Parameters<typeof SearchPanel>[0]> = {}) {
   const actions: SearchAction[] = [];
@@ -44,6 +51,26 @@ describe('SearchPanel', () => {
     expect(actions).not.toContainEqual({ type: 'roofAgeMin', years: 250 });
     await userEvent.tab();
     expect(actions).toContainEqual({ type: 'roofAgeMin', years: 250 });
+  });
+
+  it('says the radius maximum while more is typed, and after the blur clamps it to 25', async () => {
+    render(<ReducedPanel />);
+    const radius = screen.getByLabelText('Radius');
+    await userEvent.clear(radius);
+    await userEvent.type(radius, '30');
+    expect(screen.getByRole('status')).toHaveTextContent('Maximum radius is 25 mi.');
+    expect(radius).toHaveAttribute('aria-invalid', 'true');
+    expect(radius).toHaveAccessibleDescription('Maximum radius is 25 mi.');
+
+    await userEvent.tab();
+    expect(radius).toHaveValue(25);
+    expect(screen.getByRole('status')).toHaveTextContent('Maximum radius is 25 mi.');
+    expect(radius).not.toHaveAttribute('aria-invalid');
+
+    await userEvent.clear(radius);
+    await userEvent.type(radius, '12');
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+    expect(radius).toHaveValue(12);
   });
 
   it('asks for the location and disables the button while locating', async () => {

@@ -9,6 +9,8 @@ export interface NumberFieldProps {
   step: number;
   unit: string;
   hint?: string;
+  /** Said while the typed value is above `max`, and after the blur that clamps it to `max`. */
+  maxMessage?: string;
   /** Called with every in-range value while typing, and with whatever was typed on blur (the caller clamps). */
   onCommit: (value: number) => void;
 }
@@ -23,10 +25,17 @@ export function NumberField({
   step,
   unit,
   hint,
+  maxMessage,
   onCommit,
 }: NumberFieldProps) {
   const [draft, setDraft] = useState<string | null>(null);
+  const [clampedToMax, setClampedToMax] = useState(false);
+  const typedAboveMax =
+    maxMessage !== undefined && draft !== null && draft.trim() !== '' && Number(draft) > max;
+  const showMax = typedAboveMax || (clampedToMax && value === max);
   const hintId = hint ? `${id}-hint` : undefined;
+  const maxId = showMax ? `${id}-max` : undefined;
+  const describedBy = [hintId, maxId].filter(Boolean).join(' ') || undefined;
 
   return (
     <div className="field">
@@ -43,9 +52,11 @@ export function NumberField({
           max={max}
           step={step}
           value={draft ?? String(value)}
-          aria-describedby={hintId}
+          aria-describedby={describedBy}
+          aria-invalid={typedAboveMax || undefined}
           onFocus={() => {
             setDraft(String(value));
+            setClampedToMax(false);
           }}
           onChange={(event) => {
             const text = event.target.value;
@@ -59,6 +70,7 @@ export function NumberField({
             if (draft !== null && draft.trim() !== '' && Number.isFinite(Number(draft))) {
               onCommit(Number(draft));
             }
+            setClampedToMax(typedAboveMax);
             setDraft(null);
           }}
           onKeyDown={(event) => {
@@ -70,6 +82,11 @@ export function NumberField({
       {hint ? (
         <p id={hintId} className="field-hint">
           {hint}
+        </p>
+      ) : null}
+      {showMax ? (
+        <p id={maxId} className="field-hint" role="status">
+          {maxMessage}
         </p>
       ) : null}
     </div>

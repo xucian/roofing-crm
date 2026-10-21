@@ -7,7 +7,6 @@ import {
   formatOpenDuration,
   formatPropertyLink,
   groupPermits,
-  isLongOpen,
   permitDates,
 } from './format-permit';
 
@@ -71,15 +70,22 @@ describe('open duration', () => {
     ).toBeNull();
   });
 
-  it('flags permits open or stalled for five years or more as long-open', () => {
-    expect(isLongOpen(fixturePermit(1, { open_duration_days: 1825 }))).toBe(true);
-    expect(isLongOpen(fixturePermit(1, { open_duration_days: 1824 }))).toBe(false);
+  it('says a permit listed as open or stalled was completed, never how long it is open', () => {
     expect(
-      isLongOpen(fixturePermit(1, { status_group: 'stalled', open_duration_days: 4000 })),
-    ).toBe(true);
-    expect(isLongOpen(fixturePermit(1, { status_group: 'closed', open_duration_days: 9000 }))).toBe(
-      false,
-    );
+      formatOpenDuration(
+        fixturePermit(1, { open_duration_days: 10151, completed_date: '1999-07-04' }),
+      ),
+    ).toBe('Listed as open, but completed 1999-07-04');
+    expect(
+      formatOpenDuration(
+        fixturePermit(1, {
+          status: 'Expired',
+          status_group: 'stalled',
+          open_duration_days: 900,
+          completed_date: '2020-01-02',
+        }),
+      ),
+    ).toBe('Listed as stalled, but completed 2020-01-02');
   });
 });
 
@@ -109,6 +115,16 @@ describe('permit fields', () => {
       { label: 'Name', value: 'FIXTURE ROOFER' },
       { label: 'Trade', value: 'General Contractor' },
     ]);
+  });
+
+  it('shows a printed phone only when it has at least 10 digits, never an area code alone', () => {
+    const contractor = fixturePermit(1).contractor!;
+    const phone = (printed: string) =>
+      contractorLines({ ...contractor, phone: printed }).find((line) => line.label === 'Phone');
+    expect(phone('512')).toBeUndefined();
+    expect(phone('(000) 000-000')).toBeUndefined();
+    expect(phone('(000) 000-0000')).toEqual({ label: 'Phone', value: '(000) 000-0000' });
+    expect(phone('+1 000 000 0000')).toEqual({ label: 'Phone', value: '+1 000 000 0000' });
   });
 
   it('says how the permit was linked to the property', () => {

@@ -5,14 +5,16 @@ import type {
   PropertySummary,
   SearchCenter,
 } from '@roofing-crm/pipeline-client';
-import type {
-  ChatCenter,
-  ChatEvidence,
-  ChatEvidenceKind,
-  ChatLimitation,
-  Lead,
+import {
+  ROOF_JOB_CLASSES,
+  type ChatCenter,
+  type ChatEvidence,
+  type ChatEvidenceKind,
+  type ChatLimitation,
+  type Lead,
 } from '@roofing-crm/shared';
 import { MAP_PIN, type CenterPoint } from './guard';
+import type { ToolsUsed } from './tools';
 
 /** The citation-token kinds the answer may use, and the evidence each one is checked against. */
 export const CITABLE: Readonly<Record<string, ChatEvidenceKind>> = {
@@ -247,10 +249,13 @@ export function turnLimitations(meta: Meta, evidence: EvidenceCollector): ChatLi
   return out;
 }
 
-/** Server assumptions: the centers the searches used, and the identity and snapshot rules. */
+/**
+ * Server assumptions: the centers and the roof work classes the searches used, and the identity and
+ * snapshot rules.
+ */
 export function turnAssumptions(
   evidence: EvidenceCollector,
-  used: { centers: CenterPoint[]; pin: boolean },
+  used: ToolsUsed,
   pin: { lat: number; lon: number } | null,
 ): string[] {
   const out: string[] = [];
@@ -266,6 +271,13 @@ export function turnAssumptions(
   if (used.pin && pin) {
     out.push(
       `Search center: the map's pin at ${pin.lat.toFixed(5)}, ${pin.lon.toFixed(5)}; distances are measured from it.`,
+    );
+  }
+  for (const classes of new Set(used.roofWorkClasses.map((list) => list.join(', ')))) {
+    out.push(
+      classes === ROOF_JOB_CLASSES.join(', ')
+        ? `Permits searched: roof jobs only (roof_work_class ${classes}); accessory roofs such as sheds, and new construction, are left out unless you ask for every roofing class.`
+        : `Permits searched: roof_work_class ${classes}.`,
     );
   }
   if (evidence.seen.contractors > 0) {

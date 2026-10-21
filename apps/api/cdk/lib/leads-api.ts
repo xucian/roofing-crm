@@ -13,6 +13,7 @@ import * as logs from 'aws-cdk-lib/aws-logs';
 import * as sns from 'aws-cdk-lib/aws-sns';
 import { Construct } from 'constructs';
 import { AGENT_NAME } from '@roofing-crm/shared';
+import { DAILY_LIMITS } from '../../src/config';
 import {
   CHAT_FAILURE_REASONS,
   METRIC,
@@ -57,13 +58,27 @@ export const THROTTLES = {
   >;
 };
 
+/** Lambda timeout: above the 25 s handler deadline, under API Gateway's 30 s integration cap. */
+export const FUNCTION_TIMEOUT = Duration.seconds(29);
+
+const CREATE_MANY_ROUTE = THROTTLES.routes[`POST ${API_BASE_PATH}/leads.createMany`];
+
+/**
+ * The most `leads.createMany` calls its route lets run at once: the burst, plus the rate over the
+ * longest a call runs (the function timeout), 17. A call saves up to 25 rows one after another for
+ * up to 25 s, so at 0.5 a second about 13 overlap even when the pipeline is warm.
+ */
+const CREATE_MANY_PEAK =
+  CREATE_MANY_ROUTE.burstLimit +
+  Math.ceil(CREATE_MANY_ROUTE.rateLimit * FUNCTION_TIMEOUT.toSeconds());
+
 /**
  * The `leads` function's reserved concurrency (§3, metagross item 9): its bulkhead, so the F5 agent
- * cannot starve lead writes, and its cap. It covers the route throttles' worst case: two 25 s
- * `createMany` calls plus creates, edits and lists. The account allows 1,000 executions since the
- * increase (docs/decisions.md, 2026-10-20 F4 entry).
+ * cannot starve lead writes, and its cap. It covers `createMany`'s peak plus the 8 executions the
+ * first reservation of 10 left for single creates, edits and lists: 25 of the account's 1,000 (980
+ * unreserved on 2026-10-21; AWS keeps at least 100 unreserved).
  */
-export const LEADS_RESERVED_CONCURRENCY = 10;
+export const LEADS_RESERVED_CONCURRENCY = CREATE_MANY_PEAK + 8;
 
 /** The `agent` function's reserved concurrency: at most 5 turns at once, whatever the traffic. */
 export const AGENT_RESERVED_CONCURRENCY = 5;
@@ -74,10 +89,7 @@ export const DEFAULT_BEDROCK_MODEL_ID = 'us.anthropic.claude-sonnet-4-6';
 export const BEDROCK_ROUTING_REGIONS = ['us-east-1', 'us-east-2', 'us-west-2'] as const;
 
 /** Chat tokens in a UTC day that raise the usage alarm: three quarters of the daily cap. */
-export const DAILY_TOKEN_ALARM = 1_500_000;
-
-/** Lambda timeout: above the 25 s handler deadline, under API Gateway's 30 s integration cap. */
-export const FUNCTION_TIMEOUT = Duration.seconds(29);
+export const DAILY_TOKEN_ALARM = (DAILY_LIMITS.tokens * 3) / 4;
 
 export interface LeadsApiProps {
   /** The pipeline API v1 base the function reads snapshots from; null in a synth without inputs. */
@@ -190,6 +202,9 @@ export class LeadsApi extends Construct {
         LEADS_TABLE: this.table.tableName,
         ...(props.pipelineApiBase === null ? {} : { PIPELINE_API_BASE: props.pipelineApiBase }),
         BEDROCK_MODEL_ID: this.bedrockModelId,
+        // The daily caps, from the value the ChatDailyTokens alarm reads.
+        AGENT_DAILY_TURNS: String(DAILY_LIMITS.turns),
+        AGENT_DAILY_TOKENS: String(DAILY_LIMITS.tokens),
         LANGSMITH_PROJECT: AGENT_NAME,
         LANGSMITH_TRACING: props.langsmithSecretName === null ? 'false' : 'true',
         ...(props.langsmithSecretName === null

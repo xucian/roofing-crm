@@ -6,7 +6,7 @@ import {
   type RoofWorkClass,
   type StatusGroup,
 } from '@roofing-crm/pipeline-client';
-import { PERMIT_SIGNAL, formatDays } from '@roofing-crm/shared';
+import { callablePhone, formatDays, hasCompletionConflict } from '@roofing-crm/shared';
 
 /** The contract's status groups, in the CRM's words (docs/decisions.md 2026-10-17). */
 export const STATUS_GROUP_LABELS: Readonly<Record<StatusGroup, string>> = {
@@ -64,15 +64,6 @@ export function groupPermits(permits: readonly PermitSummary[]): {
   };
 }
 
-/** Open or stalled for at least the long-open threshold (contract "Long-open", 5 years). */
-export function isLongOpen(permit: PermitSummary): boolean {
-  return (
-    (permit.status_group === 'open' || permit.status_group === 'stalled') &&
-    permit.open_duration_days !== null &&
-    permit.open_duration_days >= PERMIT_SIGNAL.longOpenYears * 365
-  );
-}
-
 const OPEN_SINCE_BASIS: Readonly<Record<NonNullable<PermitSummary['open_since_basis']>, string>> = {
   issued_date: 'issued',
   applied_date: 'applied',
@@ -81,9 +72,14 @@ const OPEN_SINCE_BASIS: Readonly<Record<NonNullable<PermitSummary['open_since_ba
 /**
  * How long the permit has been, or was, open, as the API computes it (docs/decisions.md §4):
  * "Open 44 years, since 1981-10-23 (issued)" or "Was open 5 months until it expired on
- * 2023-05-28, 3.4 years ago". Null for closed permits and those that need review.
+ * 2023-05-28, 3.4 years ago". A permit listed as open or stalled that carries a completed date
+ * reads "Listed as open, but completed 1999-07-04". Null for closed permits and those that need
+ * review.
  */
 export function formatOpenDuration(permit: PermitSummary): string | null {
+  if (hasCompletionConflict(permit)) {
+    return `Listed as ${permit.status_group}, but completed ${permit.completed_date}`;
+  }
   const days = permit.open_duration_days;
   if (days === null) return null;
   const since =
@@ -128,13 +124,13 @@ export function formatBbb(bbb: Bbb): string {
   }
 }
 
-/** The contractor's printed fields that are present: name, company, trade, phone. */
+/** The contractor's printed fields that are present: name, company, trade, a phone of 10+ digits. */
 export function contractorLines(contractor: PermitContractor): { label: string; value: string }[] {
   const lines: { label: string; value: string | null }[] = [
     { label: 'Name', value: contractor.printed_name },
     { label: 'Company', value: contractor.company_name },
     { label: 'Trade', value: contractor.trade },
-    { label: 'Phone', value: contractor.phone },
+    { label: 'Phone', value: callablePhone(contractor.phone) },
   ];
   return lines.filter(
     (line): line is { label: string; value: string } =>

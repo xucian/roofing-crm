@@ -6,14 +6,14 @@ import { USAGE_PARTITION, createDailyUsage, utcDay } from './usage';
 
 const doc = DynamoDBDocumentClient.from(new DynamoDBClient({ region: 'us-east-2' }));
 const mock = mockClient(doc);
-const usage = createDailyUsage(doc, 'Leads', { turns: 200, tokens: 2_000_000 });
+const usage = createDailyUsage(doc, 'Leads');
 
 beforeEach(() => {
   mock.reset();
 });
 
 describe('the daily chat budget', () => {
-  it('counts a turn in the day item while both caps hold', async () => {
+  it('counts a turn in the day item while both caps hold: 500 turns, 5,000,000 tokens', async () => {
     mock.on(UpdateCommand).resolves({});
     await expect(usage.take('2026-10-21')).resolves.toBe(true);
     expect(mock.commandCalls(UpdateCommand)[0]?.args[0].input).toEqual({
@@ -22,7 +22,7 @@ describe('the daily chat budget', () => {
       UpdateExpression: 'ADD turns :one',
       ConditionExpression:
         '(attribute_not_exists(turns) OR turns < :turns) AND (attribute_not_exists(tokens) OR tokens < :tokens)',
-      ExpressionAttributeValues: { ':one': 1, ':turns': 200, ':tokens': 2_000_000 },
+      ExpressionAttributeValues: { ':one': 1, ':turns': 500, ':tokens': 5_000_000 },
     });
   });
 

@@ -119,6 +119,13 @@ export interface ChatLeadCreated {
   outcome: 'created' | 'existing';
 }
 
+/** A record an answer offers to save as a lead: a property, or one of its permits. */
+export interface ChatOfferedLead {
+  property_id: string;
+  /** Empty for a property lead. */
+  permit_id: string;
+}
+
 export interface ChatResponse {
   outcome: ChatOutcome;
   /** Markdown subset, no HTML, images or links; ids cited as [[property:<id>]], [[permit:<id>]], … */
@@ -129,6 +136,12 @@ export interface ChatResponse {
   limitations: ChatLimitation[];
   center_used: ChatCenter | null;
   leads_created: ChatLeadCreated[];
+  /**
+   * The records the answer offers to save (its SAVE_OFFER line), each one a tool returned in this
+   * turn and the answer cites, at most 5; empty when it offers none. The Assistant page saves them
+   * with `leads.createMany` when the user presses its Save button.
+   */
+  save_offer: ChatOfferedLead[];
   run_id: string;
   model_id: string;
   prompt_version: string;

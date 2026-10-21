@@ -860,6 +860,41 @@ describe('F4: manage leads', () => {
     expect(within(await card(1)).queryByText(/No longer matches/)).not.toBeInTheDocument();
   });
 
+  it('lists no lead while a filter is read, so the count always matches the cards shown', async () => {
+    const slow = slowFilteredReads();
+    openLeads('one', 'two', 'three');
+    await card(3);
+    const status = screen.getByRole('group', { name: 'Status' });
+    await userEvent.click(within(status).getByRole('checkbox', { name: 'Closed' }));
+    await slow.next();
+    expect(await summary()).toBe('2 of 3 leads match the filters.');
+    expect(cards().sort()).toEqual([ADDRESS(1), ADDRESS(2)]);
+
+    // Typed fast while that answer shows: none of its cards stays without its count.
+    await userEvent.type(screen.getByRole('spinbutton', { name: /Roof older than/ }), '20');
+    await vi.waitFor(() => {
+      expect(slow.waiting()).toBe(1);
+    });
+    expect(screen.getByText('Filtering leads…')).toBeInTheDocument();
+    expect(cards()).toEqual([]);
+    slow.release();
+    expect(await summary()).toBe('1 of 3 leads match the filters.');
+    expect(cards()).toEqual([ADDRESS(1)]);
+
+    // After "Clear filters", the next read shows no older filter's answer either.
+    await userEvent.click(screen.getByRole('button', { name: 'Clear filters' }));
+    expect(cards()).toHaveLength(3);
+    await userEvent.click(within(status).getByRole('checkbox', { name: 'New' }));
+    await vi.waitFor(() => {
+      expect(slow.waiting()).toBe(1);
+    });
+    expect(screen.getByText('Filtering leads…')).toBeInTheDocument();
+    expect(cards()).toEqual([]);
+    slow.release();
+    expect(await summary()).toBe('2 of 3 leads match the filters.');
+    expect(cards().sort()).toEqual([ADDRESS(2), ADDRESS(3)]);
+  });
+
   it('drops a lead that an edit finds deleted elsewhere, and says so', async () => {
     openLeads('one', 'three');
     const lead = await card(1);
@@ -879,6 +914,29 @@ describe('F4: manage leads', () => {
     ).toBeInTheDocument();
     expect(cards()).toEqual([ADDRESS(3)]);
   });
+
+  /** Holds each filtered `leads.list` read until it is released, as a slow `leads` function would. */
+  function slowFilteredReads() {
+    const handle = crm.handle;
+    const held: (() => void)[] = [];
+    crm.handle = (url, init) =>
+      url.pathname.endsWith('/leads.list') && url.searchParams.get('input')?.includes('"filter"')
+        ? new Promise<void>((resolve) => held.push(resolve)).then(() => handle(url, init))
+        : handle(url, init);
+    const release = (): void => {
+      for (const resolve of held.splice(0)) resolve();
+    };
+    return {
+      waiting: () => held.length,
+      release,
+      /** Releases the next read as soon as it is sent. */
+      next: () =>
+        vi.waitFor(() => {
+          expect(held).toHaveLength(1);
+          release();
+        }),
+    };
+  }
 
   /** Waits until the page has read the list with this filter and shows the answer. */
   async function waitForFilter(filter: Record<string, unknown>): Promise<void> {
@@ -920,6 +978,8 @@ describe('F5: ask the assistant', () => {
     expect(
       screen.getByText(/^crm-req-/, { selector: '.results-request code' }),
     ).toBeInTheDocument();
+    // This answer offers nothing to save, so there is no Save button under it.
+    expect(screen.queryByRole('button', { name: /^Save \d+ as/ })).not.toBeInTheDocument();
 
     const [first] = chats();
     expect(first?.input).toMatchObject({
@@ -940,6 +1000,26 @@ describe('F5: ask the assistant', () => {
     expect(
       await screen.findByRole('complementary', { name: '1 FIXTURE ST, TESTVILLE 00000' }),
     ).toBeInTheDocument();
+  });
+
+  it("says a cited property's distance is from the map's pin, not the answer's center", async () => {
+    window.history.replaceState(null, '', '/assistant');
+    stubPipeline({
+      ...routes,
+      '/v1/properties/search': () =>
+        searchPage([fixtureProperty(1, { distance_miles: 8.2 })], 1, null),
+    });
+    render(<App config={config} />);
+    await userEvent.type(
+      screen.getByRole('textbox', { name: 'Your question' }),
+      'Long-open permits near Austin?{Enter}',
+    );
+    await userEvent.click(await screen.findByRole('button', { name: 'Property fx-1' }));
+    const drawer = await screen.findByRole('complementary', {
+      name: '1 FIXTURE ST, TESTVILLE 00000',
+    });
+    expect(await within(drawer).findByText(/8\.2 mi from the map's pin/)).toBeInTheDocument();
+    expect(within(drawer).queryByText(/from the center/)).not.toBeInTheDocument();
   });
 
   it('sends the earlier exchange as history with the next question', async () => {
@@ -1014,6 +1094,92 @@ describe('F5: ask the assistant', () => {
     );
     expect(await screen.findByText('Saved to your leads')).toBeInTheDocument();
     expect(await screen.findByRole('link', { name: 'Leads 1' })).toBeInTheDocument();
+  });
+
+  /** An answer offering permit FX-1 BP and property fx-2, both cited, for its Save button. */
+  const offering = (requestId: string) =>
+    fixtureChatResponse(requestId, {
+      answer: 'Two long-open leads: [[permit:FX-1 BP]] and [[property:fx-2]].',
+      evidence: [
+        ...fixtureChatResponse(requestId).evidence,
+        {
+          kind: 'property',
+          tool_call_id: 't1',
+          property_id: 'fx-2',
+          permit_id: null,
+          contractor_attribution_key: null,
+          record_cid: null,
+          source_url: null,
+          label: '2 FIXTURE ST, TESTVILLE 00000',
+        },
+      ],
+      save_offer: [
+        { property_id: 'fx-1', permit_id: 'FX-1 BP' },
+        { property_id: 'fx-2', permit_id: '' },
+      ],
+    });
+
+  it('saves the records an answer offers with its Save button, as the map saves ticked rows', async () => {
+    window.history.replaceState(null, '', '/assistant');
+    stubPipeline(routes);
+    crm.chat = (_, requestId) => offering(requestId);
+    render(<App config={config} />);
+    await userEvent.type(
+      screen.getByRole('textbox', { name: 'Your question' }),
+      'Long-open leads near Austin?{Enter}',
+    );
+    await userEvent.click(await screen.findByRole('button', { name: 'Save 2 as leads' }));
+
+    expect(await screen.findByText(/Saved 2 leads\./)).toBeInTheDocument();
+    expect(crm.calls.at(-1)).toEqual({
+      procedure: 'leads.createMany',
+      input: {
+        workspace_id: window.localStorage.getItem('roofing-crm.workspace'),
+        rows: [
+          { property_id: 'fx-1', permit_id: 'FX-1 BP' },
+          { property_id: 'fx-2', permit_id: '' },
+        ],
+      },
+    });
+    // No model turn saves them, and the answer now shows them saved.
+    expect(chats()).toHaveLength(1);
+    expect(screen.queryByRole('button', { name: 'Save 2 as leads' })).not.toBeInTheDocument();
+    expect(screen.getByText('Saved as leads')).toBeInTheDocument();
+    expect(await screen.findByRole('link', { name: 'Leads 2' })).toBeInTheDocument();
+  });
+
+  it('reports an offered record that failed with both request ids, and tries it again', async () => {
+    window.history.replaceState(null, '', '/assistant');
+    stubPipeline(routes);
+    crm.chat = (_, requestId) => offering(requestId);
+    crm.failRows.set('fx-2#', {
+      code: 'not_found',
+      message: 'Not found in the pipeline API (HTTP 404: not_found).',
+      pipeline_request_id: 'pl-404',
+    });
+    render(<App config={config} />);
+    await userEvent.type(
+      screen.getByRole('textbox', { name: 'Your question' }),
+      'Long-open leads near Austin?{Enter}',
+    );
+    await userEvent.click(await screen.findByRole('button', { name: 'Save 2 as leads' }));
+
+    expect(await screen.findByText('Some rows were not saved')).toBeInTheDocument();
+    expect(screen.getByText(/Saved 1 lead\. 1 row failed\./)).toBeInTheDocument();
+    expect(
+      screen.getByText(/2 FIXTURE ST, TESTVILLE 00000: not in the pipeline/),
+    ).toBeInTheDocument();
+    expect(screen.getByText('pl-404')).toBeInTheDocument();
+    // The button saves what is left; the report retries the failed row, as on the map.
+    expect(screen.getByRole('button', { name: 'Save 1 as a lead' })).toBeInTheDocument();
+    crm.failRows.clear();
+    await userEvent.click(screen.getByRole('button', { name: 'Try the failed row again' }));
+    expect(await screen.findByText('Saved 1 lead.')).toBeInTheDocument();
+    expect(crm.calls.at(-1)).toMatchObject({
+      procedure: 'leads.create',
+      input: { property_id: 'fx-2', permit_id: '' },
+    });
+    expect(screen.getByText('Saved as leads')).toBeInTheDocument();
   });
 
   it('says why the assistant refused, with the request id', async () => {

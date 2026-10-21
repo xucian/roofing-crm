@@ -842,3 +842,117 @@ changed permits against run 1), and has served it since 2026-10-21 04:10Z. Check
   run change never moves a lead between filters.
 - **Golden set.** Its expectations are tool calls, parameters, outcomes and the save rules, never counts, so run 2 needs no
   new expectations: 13 of 13 against the URL on 2026-10-21, on run 2.
+
+## 2026-10-21 — Four UI rough edges from the slowking review
+
+A slowking self-assessment of PR #14 at `15015e6` (2026-10-21; the operator keeps it outside the repository, so the PR
+no longer ships `docs/slowking-self-assessment.md` as §10 planned) listed five rough edges in the web app. Four are fixed
+in `apps/web`, each first shown by a test that failed; the map's 500-marker cap stays, as §4 decided and the list
+discloses. Where this entry differs from earlier text, this entry wins.
+
+- **Radius above 25 miles** (§4: 0.1 to 25). The maximum stays. A typed radius above it shows "Maximum radius is 25 mi."
+  under the field, as a status message the field references (`aria-describedby`), and the field is marked invalid while
+  the typed value is over. The message stays after the blur that sets the radius to 25, until the field is focused again
+  or the radius changes. The roof-age field is unchanged.
+- **The drawer's distance** (§7; the F2 and F5 entries). After an Assistant citation the drawer said "8.2 mi from the
+  center", beside an answer that may name another center. It now says "8.2 mi from the map's pin": the center the row was
+  searched around, in the words the Assistant page and the Leads filters already use. A citation still opens the
+  property without moving the pin or the camera. §4 makes the search center the user's pin, GPS fix or place;
+  re-centering on a citation would replace it and re-run the search, one pipeline call per chip, and a property outside
+  the results has no marker to bring into view.
+- **Contractor phones** (amends the 2026-10-17 sync and F2 entries: the contractor as printed). A printed phone is shown
+  only when it has at least 10 digits; "512", an area code alone, is left out like an empty field. The rule is in
+  `contractorLines`, the only place the web app shows a contractor phone; lead snapshots keep none.
+- **Lead filter counts** (amends the F4 "Reads" bullet). While a filtered read was pending, the page kept the previous
+  answer's cards, dimmed, under "Filtering leads…", which gives no count; after "Clear filters" those cards could be an
+  older filter's answer. Now no list shows while a read is pending, so "N of M leads match the filters" and the cards
+  always come from the same answer. The 300 ms wait before each read is unchanged.
+- **Tests.** Four web tests: the radius message while typing and after the clamp; the drawer's distance after a citation;
+  the phone rule; the Leads page during held reads, typing over an answer and filtering again after "Clear filters". 119
+  web tests pass.
+
+## 2026-10-21 — Review fixes: typed tools, recorded save offers, leads reservation, stack tests, chat caps
+
+The slowking review found four defects in `apps/api`, fixed here; the operator also raised the Assistant's daily caps.
+Where this entry differs from earlier text, this entry wins.
+
+- **Typed tool registry.** Each agent tool's `execute` receives its own input type, as its Zod schema parses it: a typed
+  handler per tool, one generic registration and an explicit list of the ten tools, with no cast through `unknown`.
+- **Saving from an answer: a Save button** (amends the F5 review entry, #4; alakazam's review of this batch,
+  `docs/reviews/2026-10-21-alakazam-review-fixes.md`). A "yes" no longer saves anything. A first version recorded offers
+  in the table for a "yes" to accept; the review showed its yes check accepting ordinary follow-ups ("Please show me
+  Manor instead"), so it was replaced before deploy. Now an answer that offers to save names the records on a
+  `SAVE_OFFER` line (tolerant of its spelling), which never reaches the page. The server keeps those a tool returned in
+  that turn and the answer cites, at most 5, and returns them as the response's typed `save_offer`. The Assistant page
+  shows "Save N as leads" under the answer; it calls `leads.createMany`, the route of the map's ticked rows, with the
+  same report and "Try again", so no model turn saves them. A line seen but emptied by that filter logs `offer_dropped`
+  and adds the assumption 'To save these, say "save … as leads"'. The prompt tells the model never to ask for a yes.
+  Explicit asks still save: "save" or "bookmark", or add, create, put, store or track only together with lead(s), CRM or
+  my list, so "add 2 miles to the radius" or "Track permits open more than 5 years" no longer count. The model is
+  offered `create_lead` (the SDK's `activeTools`) only on a turn whose message asks to save: the first golden run on
+  this design showed the model, after a "yes", searching again and calling `create_lead`, which its check refused; now
+  the SDK refuses such a call before it runs. The tool list is part of the cached prompt prefix, so save turns have
+  their own cache entry. No table change.
+  On a "yes" the model, with no tool to call, cited the earlier answer's permit, which the citation check rightly
+  withheld, leaving an empty `tool_error`. A reply that called no tool and fails the check now still shows none of its
+  text: the page gets `needs_clarification` with a fixed pointer to the Save button, which claims nothing about the data.
+  A save report now shows where its save started: under the answer, or on the map. Prompt
+  `pidgeot-agent.prompt.2026-10-21.6`. Golden set 18 of 18 in-process on `.6` (the full run, then the offer-and-yes pair
+  after the fallback); `pnpm agent:golden --only <id>` now also runs the case it continues.
+- **Typed tool set.** The registry's inferred type is exported (`TurnToolSet`), so tool calls stay typed instead of
+  widening to the generic `ToolSet`.
+- **Leads reservation** (amends the F4 entry). `createMany`'s route (0.5 a second, burst 2) admits up to 17 calls within
+  the 29 s function timeout, more than the 10 reserved. The `leads` function now reserves 25: that peak plus the 8 the old
+  figure left for single creates, edits and lists. The account then reserves 35 of its 1,000 executions (980 were
+  unreserved on 2026-10-21).
+- **Stack tests.** Each stack shape is synthesized once, in `beforeAll` with a 60 s timeout, and the tests only read the
+  templates. CI had timed out at 5.6 s and 5.8 s against Vitest's 5 s, when the first test paid for the first synthesis.
+- **Chat caps** (amends the F5 entry's daily budget). 500 turns and 5,000,000 model tokens per UTC day; `ChatDailyTokens`
+  fires at 3,750,000, three quarters of the cap. One value (`DAILY_LIMITS` in `apps/api/src/config.ts`) sets the
+  function's `AGENT_DAILY_TURNS` and `AGENT_DAILY_TOKENS` and the alarm. The Bedrock bound rises with the tokens, from
+  about $10 to about $25 a day. `docs/runbook.md` and `docs/metrics.md` state the new figures.
+
+## 2026-10-21 — Long-open leads are roof jobs; callable phones only
+
+The slowking review found the CRM treating any open roofing permit as a lead: near downtown Austin, 94 of the first 100
+permits open five years or more are accessory roofs or new construction, 29 carry a completed date though listed open,
+and the showcase permit 1999-002931 BP (property 510535), a storage shed completed 1999-07-04, read "Open 27 years". This
+is the CRM half. Property search has no `roof_work_class` filter yet (requested from the pipeline), so the results list,
+its match-reason labels, the map and the ordering are unchanged. Where this entry differs from earlier text, this entry
+wins.
+
+- **One rule** (`packages/shared/src/permits.ts`). Roof jobs are `primary_roof_replacement` and `repair_or_coating`. A
+  lead permit is an open or stalled roof job with no `completed_date`; a long-open lead is one open at least
+  `PERMIT_SIGNAL.longOpenYears` (5). An open or stalled permit with a `completed_date` is a completion conflict. The
+  drawer, the agent and the lead snapshot use the same functions, and `callablePhone` (10 digits or more) lives here.
+- **Drawer.** Only long-open leads get the Long-open badge and styling. A completion conflict reads "Listed as open, but
+  completed 1999-07-04" (or "Listed as stalled, but completed …") in place of its open duration; its class label stays.
+- **Agent** (prompt `pidgeot-agent.prompt.2026-10-21.4`). `search_permits` takes the contract's `roof_work_class`. An
+  area search for open or stalled roofing permits keeps roof jobs unless the model names classes; one property's or one
+  contractor's permits, closed permits and `roofing_only: false` keep every class. The model widens to the four roofing
+  classes when the user asks; named classes are put in the contract's order. The server states the classes used as an
+  assumption line, as it does the search center. Permits listed open or stalled with a completed date reach the model
+  flagged `completion_conflict` and without an open duration, so it cannot call them open; the prompt says so too.
+  Contractor phones under 10 digits are dropped.
+- **Leads.** A property lead keeps its longest-open roof job with no completed date, else, as before, its longest-open
+  open or stalled roofing permit. A property with more than 50 permits reads its first 50 open or stalled roofing permits
+  (was 1) to apply the rule.
+- **Golden set** (18 cases, was 13). The README case expects `roof_work_class` `primary_roof_replacement`,
+  `repair_or_coating`, and a new case widens to every roofing class. For the Save button: an answer that offers to save
+  returns a non-empty `save_offer` of cited records, with no `SAVE_OFFER` text and no `create_lead`; "yes" after it, "yes"
+  with no offer and "Please show me open roofing permits in Manor instead" after it create nothing.
+- **Open.** Until the pipeline's property-search change lands, the map and the results list still mark any open roofing
+  permit, so a property such as 510535 can look long-open on the map while its drawer shows no long-open permit. Lead
+  snapshots keep no completed date, so the Leads page cannot flag a completion conflict.
+
+## 2026-10-21 — Alarms page through PagerDuty
+
+Retires the email-only substitution of §2 ("PagerDuty … when it can be wired, otherwise to email") and the F3 alarm
+entry, which the slowking review listed as a Golden Path gap. The operator created a PagerDuty free-tier service with an
+Amazon CloudWatch integration and stored its URL in the SSM String parameter `/roofing-crm/pagerduty/integration-url`
+(us-east-2). As with the alarm email, the subscription is made by `pnpm deploy:aws` outside the template, because the
+URL carries the integration key: the script reads the parameter, checks that it is a PagerDuty integration URL, and
+subscribes the `Alerts` topic over HTTPS once, passing the URL to the AWS CLI in a file only the operator can read.
+Every alarm already notifies on ALARM and OK, so an incident opens and resolves itself. The email subscription stays as
+the second route. A clean clone without the parameter deploys as before and says the alarms email only
+(`docs/runbook.md`, "PagerDuty").

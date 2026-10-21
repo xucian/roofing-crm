@@ -3,6 +3,7 @@ import {
   RADIUS_MILES,
   ROOF_AGE_THRESHOLD_YEARS,
   formatCoordinates,
+  formatMiles,
 } from '@roofing-crm/shared';
 import type { Dispatch, ReactNode } from 'react';
 import { NumberField } from './NumberField';
@@ -46,6 +47,7 @@ export function SearchPanel({ search, dispatch, locating, onLocate, place }: Sea
         max={RADIUS_MILES.max}
         step={RADIUS_MILES.step}
         unit="miles"
+        maxMessage={`Maximum radius is ${formatMiles(RADIUS_MILES.max)}.`}
         onCommit={(miles) => {
           dispatch({ type: 'radius', miles });
         }}

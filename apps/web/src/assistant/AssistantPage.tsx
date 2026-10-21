@@ -2,7 +2,10 @@ import {
   CHAT_LIMITS,
   CITATION_TOKEN,
   formatCoordinates,
+  formatCount,
+  leadKey,
   type ChatEvidence,
+  type ChatOfferedLead,
   type ChatOutcome,
   type ChatResponse,
   type GeoPoint,
@@ -10,6 +13,8 @@ import {
 import { Fragment, useEffect, useRef, useState, type ReactNode } from 'react';
 import { Callout } from '../app/Callout';
 import { CrmErrorDetails } from '../leads/CrmErrorDetails';
+import { SaveReport } from '../leads/SaveReport';
+import type { LeadTarget, LeadsStore } from '../leads/use-leads';
 import { EXAMPLES } from './examples';
 import type { ChatExchange, ChatStore } from './use-chat';
 
@@ -19,6 +24,9 @@ export interface AssistantPageProps {
   pin: GeoPoint;
   /** Opens a property in the drawer on the map. */
   onOpenProperty: (propertyId: string) => void;
+  /** Saves the records an answer offers, as the map saves ticked rows. */
+  leads: LeadsStore;
+  onShowLeads: () => void;
 }
 
 const OUTCOME_LABELS: Readonly<Record<ChatOutcome, string>> = {
@@ -47,7 +55,13 @@ const KIND_LABELS: Readonly<Record<ChatEvidence['kind'], string>> = {
  * each answer are the records the tools returned, the assumptions, the limitations and the tool calls,
  * all built by the server, not by the model.
  */
-export function AssistantPage({ chat, pin, onOpenProperty }: AssistantPageProps) {
+export function AssistantPage({
+  chat,
+  pin,
+  onOpenProperty,
+  leads,
+  onShowLeads,
+}: AssistantPageProps) {
   const [draft, setDraft] = useState('');
   const transcriptRef = useRef<HTMLOListElement>(null);
   const latest = chat.exchanges.at(-1);
@@ -73,7 +87,8 @@ export function AssistantPage({ chat, pin, onOpenProperty }: AssistantPageProps)
           Ask about roofs, roofing permits, contractors and your leads in Travis County. Answers
           come only from the pipeline&apos;s records and this browser&apos;s leads, each record
           cited. &quot;Here&quot; means the map&apos;s pin, <code>{formatCoordinates(pin)}</code>.
-          Say &quot;save … as leads&quot; to save results. A turn takes about 10 seconds.
+          Save results with the Save button under an answer, or say &quot;save … as leads&quot;. A
+          turn takes about 10 seconds.
         </p>
       </header>
 
@@ -95,7 +110,13 @@ export function AssistantPage({ chat, pin, onOpenProperty }: AssistantPageProps)
       ) : (
         <ol className="assistant-transcript" ref={transcriptRef}>
           {chat.exchanges.map((exchange) => (
-            <Exchange key={exchange.id} exchange={exchange} onOpenProperty={onOpenProperty} />
+            <Exchange
+              key={exchange.id}
+              exchange={exchange}
+              onOpenProperty={onOpenProperty}
+              leads={leads}
+              onShowLeads={onShowLeads}
+            />
           ))}
         </ol>
       )}
@@ -150,9 +171,13 @@ export function AssistantPage({ chat, pin, onOpenProperty }: AssistantPageProps)
 function Exchange({
   exchange,
   onOpenProperty,
+  leads,
+  onShowLeads,
 }: {
   exchange: ChatExchange;
   onOpenProperty: (propertyId: string) => void;
+  leads: LeadsStore;
+  onShowLeads: () => void;
 }) {
   const { state } = exchange;
   return (
@@ -165,7 +190,13 @@ function Exchange({
         </Callout>
       ) : null}
       {state.status === 'answered' ? (
-        <Answer response={state.response} ms={state.ms} onOpenProperty={onOpenProperty} />
+        <Answer
+          response={state.response}
+          ms={state.ms}
+          onOpenProperty={onOpenProperty}
+          leads={leads}
+          onShowLeads={onShowLeads}
+        />
       ) : null}
     </li>
   );
@@ -315,14 +346,88 @@ function AnswerText({
   );
 }
 
+/** What the person saw for an offered record: its label among the records found, else its id. */
+function offerLabel(lead: ChatOfferedLead, evidence: ChatEvidence[]): string {
+  const record = lead.permit_id
+    ? evidence.find((item) => item.kind === 'permit' && item.permit_id === lead.permit_id)
+    : evidence.find(
+        (item) =>
+          (item.kind === 'property' || item.kind === 'lead') &&
+          item.property_id === lead.property_id,
+      );
+  return (
+    record?.label ?? (lead.permit_id ? `Permit ${lead.permit_id}` : `Property ${lead.property_id}`)
+  );
+}
+
+/**
+ * The records an answer offers to save (`save_offer`), saved with the map's route and report: the
+ * button calls `leads.createMany`, so no model turn saves them.
+ */
+function SaveOffer({
+  offer,
+  evidence,
+  leads,
+  onShowLeads,
+}: {
+  offer: ChatOfferedLead[];
+  evidence: ChatEvidence[];
+  leads: LeadsStore;
+  onShowLeads: () => void;
+}) {
+  const targets: LeadTarget[] = offer.map((lead) => ({
+    property_id: lead.property_id,
+    permit_id: lead.permit_id,
+    label: offerLabel(lead, evidence),
+  }));
+  const offered = new Set(targets.map((target) => leadKey(target)));
+  const unsaved = targets.filter((target) => !leads.savedKeys.has(leadKey(target)));
+  const saving = targets.some((target) => leads.savingKeys.has(leadKey(target)));
+  // The last save reports here when an answer's button made it, of records this answer offers.
+  const report = leads.lastSave;
+  const reportsHere =
+    report !== null &&
+    report.origin === 'assistant' &&
+    report.targets.every((target) => offered.has(leadKey(target)));
+  return (
+    <div className="assistant-section">
+      {unsaved.length > 0 ? (
+        <button
+          type="button"
+          className="button"
+          disabled={saving}
+          onClick={() => {
+            leads.save(unsaved, 'assistant');
+          }}
+        >
+          {saving
+            ? 'Saving…'
+            : unsaved.length === 1
+              ? 'Save 1 as a lead'
+              : `Save ${formatCount(unsaved.length)} as leads`}
+        </button>
+      ) : (
+        <p className="field-hint">Saved as leads</p>
+      )}
+      {reportsHere ? (
+        <SaveReport key={report.id} report={report} leads={leads} onShowLeads={onShowLeads} />
+      ) : null}
+    </div>
+  );
+}
+
 function Answer({
   response,
   ms,
   onOpenProperty,
+  leads,
+  onShowLeads,
 }: {
   response: ChatResponse;
   ms: number;
   onOpenProperty: (propertyId: string) => void;
+  leads: LeadsStore;
+  onShowLeads: () => void;
 }) {
   const records = response.evidence.filter(
     (item) => item.kind !== 'search_center' && item.kind !== 'run',
@@ -361,6 +466,14 @@ function Answer({
             .join(', ')}
           . They are on the Leads page.
         </Callout>
+      ) : null}
+      {response.save_offer.length > 0 ? (
+        <SaveOffer
+          offer={response.save_offer}
+          evidence={response.evidence}
+          leads={leads}
+          onShowLeads={onShowLeads}
+        />
       ) : null}
       {response.assumptions.length > 0 ? (
         <div className="assistant-section">

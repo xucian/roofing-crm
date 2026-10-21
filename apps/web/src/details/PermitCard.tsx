@@ -1,4 +1,5 @@
 import type { PermitSummary } from '@roofing-crm/pipeline-client';
+import { isLongOpenLead } from '@roofing-crm/shared';
 import {
   ROOF_WORK_CLASS_LABELS,
   STATUS_GROUP_HINTS,
@@ -7,7 +8,6 @@ import {
   formatBbb,
   formatOpenDuration,
   formatPropertyLink,
-  isLongOpen,
   permitDates,
 } from './format-permit';
 import type { ReactNode } from 'react';
@@ -15,13 +15,14 @@ import { Provenance } from './Provenance';
 
 /**
  * One permit (README AC 6): its status, how long it has been or was open, the work, the contractor
- * as printed with its BBB status, and where each field comes from. Third-party text is rendered as
- * text only.
+ * as printed with its BBB status, and where each field comes from. Only a long-open lead (a roof job
+ * open 5 years or more, with no completed date) is marked long-open. Third-party text is rendered
+ * as text only.
  */
 export function PermitCard({ permit, action }: { permit: PermitSummary; action?: ReactNode }) {
   const duration = formatOpenDuration(permit);
   const dates = permitDates(permit);
-  const longOpen = isLongOpen(permit);
+  const longOpen = isLongOpenLead(permit);
   return (
     <li className={`permit permit--${permit.status_group}${longOpen ? ' permit--long-open' : ''}`}>
       <div className="permit-head">

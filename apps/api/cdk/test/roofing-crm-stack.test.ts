@@ -1,6 +1,7 @@
 import { runInNewContext } from 'node:vm';
 import { Annotations, Match } from 'aws-cdk-lib/assertions';
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { DAILY_LIMITS } from '../../src/config';
 import {
   AGENT_RESERVED_CONCURRENCY,
   DAILY_TOKEN_ALARM,
@@ -11,17 +12,32 @@ import { DASHBOARD_METRIC_BUDGET } from '../lib/dashboard';
 import { SPA_ROUTING_FUNCTION, runtimeConfig } from '../lib/web-hosting';
 import { API_BASE, cleanupFixtures, synth } from './fixtures';
 
+// Each shape of the stack is synthesized once, before the tests, which only read the templates. The
+// first synthesis loads aws-cdk-lib and takes seconds on CI, past Vitest's 5 s test timeout.
+const SYNTH_TIMEOUT_MS = 60_000;
+let deployed: ReturnType<typeof synth>;
+let ciShaped: ReturnType<typeof synth>;
+let ciAnnotations: Annotations;
+let traced: ReturnType<typeof synth>;
+
+beforeAll(() => {
+  deployed = synth();
+  ciShaped = synth({ pipelineApiBase: null, basemapDir: null });
+  ciAnnotations = Annotations.fromStack(ciShaped.stack);
+  traced = synth({ langsmithSecretName: 'pidgeot-agent/langsmith-api-key' });
+}, SYNTH_TIMEOUT_MS);
+
 afterAll(cleanupFixtures);
 
 describe('RoofingCrm stack', () => {
   it('lives in us-east-2 with termination protection', () => {
-    const { stack } = synth();
+    const { stack } = deployed;
     expect(stack.region).toBe('us-east-2');
     expect(stack.terminationProtection).toBe(true);
   });
 
   it('keeps one private, encrypted, TLS-only bucket that survives stack deletion', () => {
-    const { template } = synth();
+    const { template } = deployed;
     template.resourceCountIs('AWS::S3::Bucket', 1);
     template.hasResource('AWS::S3::Bucket', {
       DeletionPolicy: 'Retain',
@@ -58,7 +74,7 @@ describe('RoofingCrm stack', () => {
   });
 
   it('routes the SPA with a viewer-request function, never with distribution-wide error pages', () => {
-    const { template } = synth();
+    const { template } = deployed;
     template.hasResourceProperties('AWS::CloudFront::Distribution', {
       DistributionConfig: Match.objectLike({
         DefaultRootObject: 'index.html',
@@ -73,7 +89,7 @@ describe('RoofingCrm stack', () => {
   });
 
   it('serves the basemap uncompressed, without the routing function', () => {
-    const { template } = synth();
+    const { template } = deployed;
     template.hasResourceProperties('AWS::CloudFront::Distribution', {
       DistributionConfig: Match.objectLike({
         CacheBehaviors: Match.arrayWith([
@@ -88,7 +104,7 @@ describe('RoofingCrm stack', () => {
   });
 
   it('sends a CSP that allows the pipeline API and nothing unsafe', () => {
-    const { template } = synth();
+    const { template } = deployed;
     const policies = template.findResources('AWS::CloudFront::ResponseHeadersPolicy');
     const csp = JSON.stringify(policies);
     expect(csp).toContain(`connect-src 'self' ${API_BASE}`);
@@ -103,8 +119,8 @@ describe('RoofingCrm stack', () => {
   });
 
   it('uploads the basemap only when one is given, with object keys kept out of the response', () => {
-    synth({ basemapDir: null }).template.resourceCountIs('Custom::CDKBucketDeployment', 2);
-    const { template } = synth();
+    ciShaped.template.resourceCountIs('Custom::CDKBucketDeployment', 2);
+    const { template } = deployed;
     template.resourceCountIs('Custom::CDKBucketDeployment', 3);
     template.allResourcesProperties('Custom::CDKBucketDeployment', { OutputObjectKeys: false });
     template.hasResourceProperties('Custom::CDKBucketDeployment', {
@@ -114,7 +130,7 @@ describe('RoofingCrm stack', () => {
   });
 
   it('caches hashed bundles for a year and revalidates the entry files', () => {
-    const { template } = synth();
+    const { template } = deployed;
     template.hasResourceProperties('Custom::CDKBucketDeployment', {
       Include: ['assets/*'],
       Prune: false,
@@ -128,11 +144,11 @@ describe('RoofingCrm stack', () => {
   });
 
   it('keeps the deployment helper logs for 90 days', () => {
-    synth().template.hasResourceProperties('AWS::Logs::LogGroup', { RetentionInDays: 90 });
+    deployed.template.hasResourceProperties('AWS::Logs::LogGroup', { RetentionInDays: 90 });
   });
 
   it('tags the resources with project_name for the cost table', () => {
-    const { template } = synth();
+    const { template } = deployed;
     for (const type of [
       'AWS::S3::Bucket',
       'AWS::CloudFront::Distribution',
@@ -152,23 +168,21 @@ describe('RoofingCrm stack', () => {
   });
 
   it('outputs the public URL', () => {
-    const { template } = synth();
+    const { template } = deployed;
     template.hasOutput('WebUrl', Match.anyValue());
     template.hasOutput('PipelineApiBase', { Value: API_BASE });
   });
 
   it('warns when synthesized without deploy inputs, as CI does', () => {
-    const { stack } = synth({ pipelineApiBase: null, basemapDir: null });
-    const annotations = Annotations.fromStack(stack);
-    annotations.hasWarning('/RoofingCrm', Match.stringLikeRegexp('pipelineApiBase is not set'));
-    annotations.hasWarning('/RoofingCrm', Match.stringLikeRegexp('basemapDir is not set'));
+    ciAnnotations.hasWarning('/RoofingCrm', Match.stringLikeRegexp('pipelineApiBase is not set'));
+    ciAnnotations.hasWarning('/RoofingCrm', Match.stringLikeRegexp('basemapDir is not set'));
     expect(runtimeConfig({ pipelineApiBase: null })).toEqual({ pipelineApiBase: null });
   });
 });
 
 describe('the CRM API (F3 to F5)', () => {
   it('keeps leads in an on-demand table keyed by workspace and lead, with point-in-time recovery', () => {
-    const { template } = synth();
+    const { template } = deployed;
     template.resourceCountIs('AWS::DynamoDB::Table', 1);
     template.hasResource('AWS::DynamoDB::Table', {
       DeletionPolicy: 'Retain',
@@ -179,12 +193,14 @@ describe('the CRM API (F3 to F5)', () => {
           { AttributeName: 'lead_key', KeyType: 'RANGE' },
         ],
         PointInTimeRecoverySpecification: { PointInTimeRecoveryEnabled: true },
+        // Nothing in the table expires: it holds leads (user data) and the daily usage items.
+        TimeToLiveSpecification: Match.absent(),
       },
     });
   });
 
   it('runs one traced leads function on Node 22, 29 s, with its own reserved concurrency', () => {
-    const { template } = synth();
+    const { template } = deployed;
     const functions = template.findResources('AWS::Lambda::Function', {
       Properties: { Handler: 'index.handler' },
     });
@@ -213,8 +229,33 @@ describe('the CRM API (F3 to F5)', () => {
     });
   });
 
+  it("reserves the leads function more than createMany's route lets run at once", () => {
+    const { template } = deployed;
+    const stage = Object.values(template.findResources('AWS::ApiGatewayV2::Stage'))[0] as {
+      Properties: {
+        RouteSettings: Record<
+          string,
+          { ThrottlingRateLimit: number; ThrottlingBurstLimit: number }
+        >;
+      };
+    };
+    const route = stage.Properties.RouteSettings['POST /api/trpc/leads.createMany']!;
+    const leads = Object.values(
+      template.findResources('AWS::Lambda::Function', {
+        Properties: { Description: 'Roofing CRM API: leads (tRPC)' },
+      }),
+    )[0] as { Properties: { Timeout: number; ReservedConcurrentExecutions: number } };
+    // Every call the route admits within one function timeout may still be running.
+    const peak =
+      route.ThrottlingBurstLimit + Math.ceil(route.ThrottlingRateLimit * leads.Properties.Timeout);
+    expect(peak).toBe(17);
+    expect(leads.Properties.ReservedConcurrentExecutions).toBe(25);
+    // With room left for single creates, edits and lists.
+    expect(leads.Properties.ReservedConcurrentExecutions - peak).toBeGreaterThanOrEqual(8);
+  });
+
   it('lets the function read and write only the leads table', () => {
-    const { template } = synth();
+    const { template } = deployed;
     const statements = Object.values(template.findResources('AWS::IAM::Policy')).flatMap(
       (policy) =>
         (
@@ -244,7 +285,7 @@ describe('the CRM API (F3 to F5)', () => {
   });
 
   it('routes each mutation on its own throttled route and queries through one GET catch-all', () => {
-    const { template } = synth();
+    const { template } = deployed;
     const keys = Object.values(template.findResources('AWS::ApiGatewayV2::Route')).map(
       (route) => (route as { Properties: { RouteKey: string } }).Properties.RouteKey,
     );
@@ -277,7 +318,7 @@ describe('the CRM API (F3 to F5)', () => {
   });
 
   it('serves the API same-origin under /api/*, never cached and never redirected', () => {
-    const { template } = synth();
+    const { template } = deployed;
     template.hasResourceProperties('AWS::CloudFront::Distribution', {
       DistributionConfig: Match.objectLike({
         CacheBehaviors: Match.arrayWith([
@@ -295,7 +336,7 @@ describe('the CRM API (F3 to F5)', () => {
   });
 
   it('keeps the function and access logs for 90 days', () => {
-    const { template } = synth();
+    const { template } = deployed;
     const groups = Object.values(template.findResources('AWS::Logs::LogGroup'));
     expect(groups.length).toBeGreaterThanOrEqual(3);
     for (const group of groups) {
@@ -306,7 +347,7 @@ describe('the CRM API (F3 to F5)', () => {
   });
 
   it('raises self-resolving alarms on one topic for failures, throttles and a pipeline outage', () => {
-    const { template } = synth();
+    const { template } = deployed;
     template.resourceCountIs('AWS::CloudWatch::Alarm', 9);
     template.allResourcesProperties('AWS::CloudWatch::Alarm', {
       TreatMissingData: 'notBreaching',
@@ -335,7 +376,7 @@ describe('the CRM API (F3 to F5)', () => {
   });
 
   it('runs the agent on its own function: Sonnet 4.6 on Bedrock, 5 reserved, traced to LangSmith', () => {
-    const { template } = synth({ langsmithSecretName: 'pidgeot-agent/langsmith-api-key' });
+    const { template } = traced;
     template.hasResourceProperties('AWS::Lambda::Function', {
       Description: Match.stringLikeRegexp('pidgeot-agent'),
       Runtime: 'nodejs22.x',
@@ -361,7 +402,7 @@ describe('the CRM API (F3 to F5)', () => {
   });
 
   it('runs the agent untraced, with no secret grant, when the deploy has no LangSmith key', () => {
-    const { template } = synth();
+    const { template } = deployed;
     template.hasResourceProperties('AWS::Lambda::Function', {
       Environment: {
         Variables: Match.objectLike({
@@ -376,7 +417,7 @@ describe('the CRM API (F3 to F5)', () => {
   });
 
   it('alarms on chat turns without an answer and on a day of heavy chat use', () => {
-    const { template } = synth();
+    const { template } = deployed;
     template.hasResourceProperties('AWS::CloudWatch::Alarm', {
       Threshold: 3,
       Metrics: Match.arrayWith([
@@ -389,6 +430,7 @@ describe('the CRM API (F3 to F5)', () => {
     });
     template.hasResourceProperties('AWS::CloudWatch::Alarm', {
       Threshold: DAILY_TOKEN_ALARM,
+      AlarmDescription: Match.stringLikeRegexp('^Chat used 3,750,000 model tokens in a day'),
       Metrics: Match.arrayWith([
         Match.objectLike({
           MetricStat: Match.objectLike({
@@ -398,10 +440,27 @@ describe('the CRM API (F3 to F5)', () => {
         }),
       ]),
     });
+    // Three quarters of the agent's daily token cap.
+    expect(DAILY_TOKEN_ALARM).toBe((DAILY_LIMITS.tokens * 3) / 4);
+  });
+
+  it('sets the daily caps on the agent function from the value the usage alarm reads', () => {
+    const { template } = deployed;
+    const agent = Object.values(
+      template.findResources('AWS::Lambda::Function', {
+        Properties: { Description: Match.stringLikeRegexp('pidgeot-agent') },
+      }),
+    )[0] as { Properties: { Environment: { Variables: Record<string, string> } } };
+    const caps = agent.Properties.Environment.Variables;
+    expect(caps).toMatchObject({ AGENT_DAILY_TURNS: '500', AGENT_DAILY_TOKENS: '5000000' });
+    template.hasResourceProperties('AWS::CloudWatch::Alarm', {
+      Threshold: (Number(caps.AGENT_DAILY_TOKENS) * 3) / 4,
+      AlarmDescription: Match.stringLikeRegexp('tokens in a day'),
+    });
   });
 
   it('draws one dashboard inside the free tier: under 50 metrics', () => {
-    const { template } = synth();
+    const { template } = deployed;
     template.resourceCountIs('AWS::CloudWatch::Dashboard', 1);
     const dashboard = Object.values(template.findResources('AWS::CloudWatch::Dashboard'))[0] as {
       Properties: { DashboardBody: { 'Fn::Join': [string, unknown[]] } };
@@ -419,7 +478,7 @@ describe('the CRM API (F3 to F5)', () => {
   });
 
   it('outputs what the handoff links to', () => {
-    const { template } = synth();
+    const { template } = deployed;
     for (const output of [
       'ApiId',
       'LeadsFunctionName',

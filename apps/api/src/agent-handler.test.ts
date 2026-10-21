@@ -111,6 +111,7 @@ describe('the agent function', () => {
         data: {
           outcome: 'answered',
           answer: 'One: [[property:fx-1]].',
+          save_offer: [],
           request_id: 'crm-req-1',
           model_id: 'us.anthropic.claude-sonnet-4-6',
         },

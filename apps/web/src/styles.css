@@ -1285,10 +1285,6 @@ select.lead-status:focus-visible,
   gap: 2px;
 }
 
-.leads-list--stale {
-  opacity: 0.6;
-}
-
 a.button {
   display: inline-block;
   text-decoration: none;

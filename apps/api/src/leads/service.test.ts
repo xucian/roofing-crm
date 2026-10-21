@@ -149,14 +149,69 @@ describe('leads.create', () => {
     expect(lead.snapshot.permit).toMatchObject({ permit_id: 'FX-3 BP', basis: 'longest_open' });
   });
 
-  it('asks the permit search when the embedded permits are truncated', async () => {
+  it('keeps a roof job with no completed date before a longer-open shed or a completed job', async () => {
+    const detail = fixtureDetail(1, {
+      permits: [
+        fixturePermit(1, { roof_work_class: 'accessory_roof', open_duration_days: 9000 }),
+        fixturePermit(2, { open_duration_days: 8000, completed_date: '2001-01-01' }),
+        fixturePermit(3, {
+          roof_work_class: 'repair_or_coating',
+          status_group: 'stalled',
+          open_duration_days: 3000,
+        }),
+      ],
+    });
+    const { service } = setup({
+      '/v1/meta': META,
+      '/v1/properties/fx-1': () => ({ body: detail }),
+    });
+    const { lead } = await service.create({
+      workspace_id: WORKSPACE,
+      property_id: 'fx-1',
+      permit_id: '',
+    });
+    expect(lead.snapshot.permit).toMatchObject({
+      permit_id: 'FX-3 BP',
+      basis: 'longest_open',
+      roof_work_class: 'repair_or_coating',
+    });
+  });
+
+  it('falls back to the longest-open roofing permit when no roof job qualifies', async () => {
+    const detail = fixtureDetail(1, {
+      permits: [
+        fixturePermit(1, { open_duration_days: 8000, completed_date: '2001-01-01' }),
+        fixturePermit(2, { roof_work_class: 'accessory_roof', open_duration_days: 9000 }),
+      ],
+    });
+    const { service } = setup({
+      '/v1/meta': META,
+      '/v1/properties/fx-1': () => ({ body: detail }),
+    });
+    const { lead } = await service.create({
+      workspace_id: WORKSPACE,
+      property_id: 'fx-1',
+      permit_id: '',
+    });
+    expect(lead.snapshot.permit).toMatchObject({ permit_id: 'FX-2 BP', basis: 'longest_open' });
+  });
+
+  it('asks the permit search when the embedded permits are truncated, and picks by the same rule', async () => {
     const { service, calls } = setup({
       '/v1/meta': META,
       '/v1/properties/fx-1': () => ({
         body: fixtureDetail(1, { permits: [], permits_total: 80, permits_truncated: true }),
       }),
       '/v1/permits/search': () => ({
-        body: { items: [fixturePermit(7)], total: 3, next_cursor: 'c', area_note: null },
+        body: {
+          items: [
+            fixturePermit(6, { roof_work_class: 'accessory_roof', open_duration_days: 9000 }),
+            fixturePermit(7),
+          ],
+          total: 3,
+          next_cursor: 'c',
+          area_note: null,
+        },
       }),
     });
     const { lead } = await service.create({
@@ -165,7 +220,7 @@ describe('leads.create', () => {
       permit_id: '',
     });
     expect(calls[2]).toBe(
-      '/v1/permits/search?property_id=fx-1&status_group=open,stalled&roofing_only=true&limit=1',
+      '/v1/permits/search?property_id=fx-1&status_group=open,stalled&roofing_only=true&limit=50',
     );
     expect(lead.snapshot.permit?.permit_id).toBe('FX-7 BP');
   });

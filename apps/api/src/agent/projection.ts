@@ -7,7 +7,12 @@ import type {
   PropertySummary,
   SearchCenter,
 } from '@roofing-crm/pipeline-client';
-import { leadPermitGroup, type Lead } from '@roofing-crm/shared';
+import {
+  callablePhone,
+  hasCompletionConflict,
+  leadPermitGroup,
+  type Lead,
+} from '@roofing-crm/shared';
 import { addressLabel, firstText } from './evidence';
 import { sanitizeDeep, sanitizeText } from './sanitize';
 
@@ -15,8 +20,9 @@ import { sanitizeDeep, sanitizeText } from './sanitize';
  * What the model sees of each tool result (alakazam item 9, as in the pipeline agent): ids, CIDs,
  * signals and the source URL; long text cut and every string sanitized. Never the owner's name or
  * mailing address: tenure, absentee and out-of-area stay. The contractor as printed on a public
- * permit (name, company, trade, phone) is a business record and stays. Full records go to the
- * evidence, not to the model.
+ * permit (name, company, trade, a phone of 10 digits or more) is a business record and stays. A
+ * permit listed as open or stalled with a completed date carries `completion_conflict` and no open
+ * duration. Full records go to the evidence, not to the model.
  */
 
 /** Description length in a list (a single permit gets the full cap). */
@@ -49,6 +55,9 @@ function property(p: PropertySummary): Record<string, unknown> {
 
 function permit(p: PermitSummary, textMax: number): Record<string, unknown> {
   const contractor = p.contractor;
+  // A permit listed as open or stalled with a completed date was finished: no open duration reaches
+  // the model, so it cannot say "open 27 years".
+  const conflict = hasCompletionConflict(p);
   return {
     permit_id: p.permit_id,
     property_id: p.property_id,
@@ -61,17 +70,18 @@ function permit(p: PermitSummary, textMax: number): Record<string, unknown> {
     issued_date: p.issued_date,
     expires_date: p.expires_date,
     completed_date: p.completed_date,
-    open_since: p.open_since,
-    open_duration_days: p.open_duration_days,
-    open_duration_as_of: p.open_duration_as_of,
-    days_since_expiry: p.days_since_expiry,
+    completion_conflict: conflict ? true : null,
+    open_since: conflict ? null : p.open_since,
+    open_duration_days: conflict ? null : p.open_duration_days,
+    open_duration_as_of: conflict ? null : p.open_duration_as_of,
+    days_since_expiry: conflict ? null : p.days_since_expiry,
     contractor: contractor
       ? {
           contractor_attribution_key: contractor.contractor_attribution_key,
           company_name: firstText(contractor.company_name),
           printed_name: firstText(contractor.printed_name),
           trade: firstText(contractor.trade),
-          phone: firstText(contractor.phone),
+          phone: callablePhone(contractor.phone),
         }
       : null,
     bbb_status: p.bbb.status,
@@ -185,7 +195,7 @@ export function projectContractor(contractor: Contractor): unknown {
     company_name: contractor.company_name,
     printed_names: contractor.printed_names.slice(0, 5),
     trade: contractor.trade,
-    phone: contractor.phone,
+    phone: callablePhone(contractor.phone),
     permit_count: contractor.permit_count,
     open_permit_count: contractor.open_permit_count,
     roofing_permit_count: contractor.roofing_permit_count,

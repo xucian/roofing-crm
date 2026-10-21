@@ -32,10 +32,16 @@ interface GoldenCase {
   max_tool_calls?: number;
   leads_created?: number;
   leads_created_at_least?: number;
+  /** At least this many records in the answer's `save_offer` (its Save button). */
+  save_offer_min?: number;
+  /** Messages before the question, as written here (an assistant message the server never sent). */
+  history?: { role: 'user' | 'assistant'; content: string }[];
   /** An earlier case whose question and answer come before this question. */
   history_from?: string;
   center_kind?: string;
   answer_mentions?: string;
+  /** Text one of the server's assumption lines must contain. */
+  assumption_mentions?: string;
 }
 
 interface Golden {
@@ -61,6 +67,20 @@ export function check(expected: GoldenCase, answer: ChatResponse): string[] {
   }
   for (const name of expected.forbid_tools ?? []) {
     if (names.includes(name)) problems.push(`called ${name}`);
+  }
+  // In every case: the offer reaches the page as save_offer, never as text, and only cited records.
+  if (/SAVE[_ ]OFFER/i.test(answer.answer)) problems.push('the answer shows SAVE_OFFER text');
+  const shown = [answer.answer, ...answer.assumptions].join('\n');
+  for (const offer of answer.save_offer) {
+    const token = offer.permit_id
+      ? `[[permit:${offer.permit_id}]]`
+      : `[[property:${offer.property_id}]]`;
+    if (!shown.includes(token)) problems.push(`offered ${token} is not cited`);
+  }
+  if (expected.save_offer_min !== undefined && answer.save_offer.length < expected.save_offer_min) {
+    problems.push(
+      `${String(answer.save_offer.length)} records offered, expected >= ${String(expected.save_offer_min)}`,
+    );
   }
   for (const [name, params] of Object.entries(expected.params ?? {})) {
     const calls = answer.tool_calls.filter((call) => call.name === name && call.status === 'ok');
@@ -117,6 +137,10 @@ export function check(expected: GoldenCase, answer: ChatResponse): string[] {
   }
   if (expected.answer_mentions && !answer.answer.includes(expected.answer_mentions)) {
     problems.push(`answer does not mention ${expected.answer_mentions}`);
+  }
+  const mentions = expected.assumption_mentions;
+  if (mentions && !answer.assumptions.some((line) => line.includes(mentions))) {
+    problems.push(`no assumption mentions ${mentions}`);
   }
   return problems;
 }
@@ -182,11 +206,16 @@ async function main(): Promise<void> {
   const answers = new Map<string, { question: string; answer: string }>();
   let failed = 0;
   console.log(`Golden set: ${values.url ?? 'in-process'}, workspace ${workspace}`);
+  // --only runs one case, and the case whose answer it continues (history_from).
+  const only = values.only
+    ? new Set([values.only, golden.cases.find((entry) => entry.id === values.only)?.history_from])
+    : null;
   for (const expected of golden.cases) {
-    if (values.only && expected.id !== values.only) continue;
+    if (only && !only.has(expected.id)) continue;
     const started = Date.now();
     const before = expected.history_from ? answers.get(expected.history_from) : undefined;
     const messages = [
+      ...(expected.history ?? []),
       ...(before
         ? [
             { role: 'user', content: before.question },

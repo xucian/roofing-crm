@@ -263,7 +263,13 @@ export function App({ config }: { config: RuntimeConfig }) {
       ) : null}
       {route === 'assistant' ? (
         <div className="leads-pane">
-          <AssistantPage chat={chat} pin={search.center} onOpenProperty={openOnMap} />
+          <AssistantPage
+            chat={chat}
+            pin={search.center}
+            onOpenProperty={openOnMap}
+            leads={leads}
+            onShowLeads={showLeads}
+          />
         </div>
       ) : null}
       <Footer config={config} meta={meta} />

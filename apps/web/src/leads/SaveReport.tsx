@@ -34,7 +34,7 @@ export function SaveReport({
           type="button"
           className="button button--quiet callout-action"
           onClick={() => {
-            leads.save(report.targets);
+            leads.save(report.targets, report.origin);
           }}
         >
           Try again
@@ -84,7 +84,10 @@ export function SaveReport({
             type="button"
             className="button button--quiet callout-action"
             onClick={() => {
-              leads.save(report.failed.map(({ target }) => target));
+              leads.save(
+                report.failed.map(({ target }) => target),
+                report.origin,
+              );
             }}
           >
             Try the failed {report.failed.length === 1 ? 'row' : 'rows'} again

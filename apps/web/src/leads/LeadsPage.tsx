@@ -54,11 +54,9 @@ export function LeadsPage({ leads, filters, onShowOnMap }: LeadsPageProps) {
   const shown =
     filtered.status === 'ready'
       ? filtered.leads
-      : filtered.status === 'loading'
-        ? filtered.previous
-        : filtered.status === 'off' && view.status === 'ready'
-          ? view.leads
-          : null;
+      : filtered.status === 'off' && view.status === 'ready'
+        ? view.leads
+        : null;
   // The filter the shown list answered; an edited lead it no longer keeps stays until it changes.
   const answered = filtered.status === 'ready' ? filtered.filter : null;
   return (
@@ -132,11 +130,7 @@ export function LeadsPage({ leads, filters, onShowOnMap }: LeadsPageProps) {
                 shown={shown?.length ?? null}
               />
               {shown && shown.length > 0 ? (
-                <ol
-                  className={
-                    filtered.status === 'loading' ? 'leads-list leads-list--stale' : 'leads-list'
-                  }
-                >
+                <ol className="leads-list">
                   {shown.map((lead) => (
                     <LeadCard
                       key={lead.lead_id}

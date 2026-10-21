@@ -93,7 +93,10 @@ const count = z.int().min(0);
 
 export const LeadPermitSnapshotSchema = z.object({
   permit_id: z.string().max(64),
-  /** `saved`: the lead is this permit; `longest_open`: the property's longest-open roofing permit. */
+  /**
+   * `saved`: the lead is this permit; `longest_open`: the property's longest-open roof job with no
+   * completed date (`isRoofJobLead`), else its longest-open roofing permit.
+   */
   basis: z.enum(['saved', 'longest_open']),
   status_group: z.enum(STATUS_GROUPS),
   /** The status as printed by the city. */
@@ -130,7 +133,7 @@ export const LeadSnapshotSchema = z.object({
     closed: count,
     needs_review: count,
   }),
-  /** The saved permit, or for a property lead its longest-open open or stalled roofing permit. */
+  /** The saved permit, or for a property lead the permit its basis names. */
   permit: LeadPermitSnapshotSchema.nullable(),
 });
 export type LeadSnapshot = z.infer<typeof LeadSnapshotSchema>;

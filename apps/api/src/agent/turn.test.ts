@@ -112,8 +112,9 @@ function setup(steps: unknown[], routes: Record<string, PipelineRoute> = ROUTES)
     logger: quiet,
     newId: () => `01JBQ8000000000000000000${String(n++).padStart(2, '0')}`,
   });
+  const model = new MockLanguageModelV4({ doGenerate: steps as never });
   const deps: TurnDeps = {
-    model: new MockLanguageModelV4({ doGenerate: steps as never }),
+    model,
     modelId: 'us.anthropic.claude-sonnet-4-6',
     langsmith: {
       tracingEnabled: false,
@@ -125,7 +126,7 @@ function setup(steps: unknown[], routes: Record<string, PipelineRoute> = ROUTES)
     leads,
     meta: META,
   };
-  return { deps, repository, calls: fetch.calls };
+  return { deps, repository, model, calls: fetch.calls };
 }
 
 const input = (question: string, extra: Partial<TurnInput> = {}): TurnInput => ({
@@ -140,6 +141,8 @@ const input = (question: string, extra: Partial<TurnInput> = {}): TurnInput => (
 
 const README_QUESTION =
   'Show me open roofing permits older than five years within five miles of Austin';
+const ROOF_JOBS_ASSUMPTION =
+  'Permits searched: roof jobs only (roof_work_class primary_roof_replacement, repair_or_coating); accessory roofs such as sheds, and new construction, are left out unless you ask for every roofing class.';
 const PERMIT_ARGS = {
   lat: CENTER.lat,
   lon: CENTER.lon,
@@ -189,9 +192,79 @@ describe('runTurn', () => {
       'bbb.org',
       'austin-issued-construction-permits/3syk-w9eu',
     ]);
-    expect(calls.at(-1)).toContain('min_open_years=5');
-    expect(calls.at(-1)).toContain('status_group=open,stalled');
+    // A search for leads keeps roof jobs unless the model names classes, and the answer says so.
+    expect(body.tool_calls[1]?.args).toMatchObject({
+      ...PERMIT_ARGS,
+      roof_work_class: ['primary_roof_replacement', 'repair_or_coating'],
+    });
+    expect(calls.at(-1)).toBe(
+      '/v1/permits/search?lat=30.2672&lon=-97.7431&radius_miles=5&status_group=open,stalled&roofing_only=true&min_open_years=5&limit=20&roof_work_class=primary_roof_replacement,repair_or_coating',
+    );
+    expect(body.assumptions).toContain(ROOF_JOBS_ASSUMPTION);
     expect(result.stats).toMatchObject({ steps: 3, tool_calls: 2, cited: 2, input_tokens: 3000 });
+  });
+
+  it('searches every roofing class when the model widens, in the contract order, and says so', async () => {
+    const { deps, calls, model } = setup([
+      call('t1', 'resolve_search_center', { q: 'Austin' }),
+      call('t2', 'search_permits', {
+        ...PERMIT_ARGS,
+        roof_work_class: [
+          'accessory_roof',
+          'repair_or_coating',
+          'primary_roof_new_construction',
+          'primary_roof_replacement',
+        ],
+      }),
+      text('OUTCOME: answered\n\nTwo permits: [[permit:FX-1 BP]] and [[permit:FX-2 BP]].'),
+    ]);
+    const result = await runTurn(
+      deps,
+      input(`${README_QUESTION}, sheds and new construction included`),
+    );
+    if (result.kind !== 'response') throw new Error('expected a response');
+    const every = [
+      'primary_roof_replacement',
+      'primary_roof_new_construction',
+      'repair_or_coating',
+      'accessory_roof',
+    ];
+    expect(result.body.tool_calls[1]?.args.roof_work_class).toEqual(every);
+    expect(calls.at(-1)).toContain(`roof_work_class=${every.join(',')}`);
+    // The model is offered the contract's classes as an optional list (the schema's input side).
+    const offered = model.doGenerateCalls[0]?.tools?.find((tool) => tool.name === 'search_permits');
+    expect(JSON.stringify(offered)).toContain(
+      '"roof_work_class":{"description":"Restrict to these roof work classes.',
+    );
+    expect(JSON.stringify(offered)).toContain('"accessory_roof","other","needs_review"');
+    expect(result.body.assumptions).toContain(
+      `Permits searched: roof_work_class ${every.join(', ')}.`,
+    );
+    expect(result.body.assumptions).not.toContain(ROOF_JOBS_ASSUMPTION);
+  });
+
+  it("keeps every class for one property's permits, one contractor's, closed ones, or all permits", async () => {
+    const { deps, calls } = setup([
+      call('t1', 'search_permits', {
+        property_id: 'fx-1',
+        status_group: ['open', 'stalled', 'closed', 'needs_review'],
+        roofing_only: false,
+      }),
+      call('t2', 'search_permits', { contractor_attribution_key: 'fx-key-1' }),
+      call('t3', 'search_permits', { status_group: ['closed'] }),
+      call('t4', 'search_permits', { roofing_only: false }),
+      text('OUTCOME: answered\n\nPermits: [[permit:FX-1 BP]].'),
+    ]);
+    const result = await runTurn(deps, input('Every permit of property fx-1?'));
+    if (result.kind !== 'response') throw new Error('expected a response');
+    expect(result.body.tool_calls.map((c) => [c.status, c.args.roof_work_class])).toEqual([
+      ['ok', undefined],
+      ['ok', undefined],
+      ['ok', undefined],
+      ['ok', undefined],
+    ]);
+    expect(calls.filter((url) => url.includes('roof_work_class'))).toEqual([]);
+    expect(result.body.assumptions.some((line) => line.startsWith('Permits searched'))).toBe(false);
   });
 
   it('returns no model text when the answer cites an id no tool returned', async () => {
@@ -245,7 +318,8 @@ describe('runTurn', () => {
     const notAsked = setup(steps);
     const quiet = await runTurn(notAsked.deps, input('Long-open roofing permits county-wide?'));
     if (quiet.kind !== 'response') throw new Error('expected a response');
-    expect(quiet.body.tool_calls[1]?.result_summary).toMatch(/^not_requested/);
+    // Not offered create_lead, so the SDK refuses both calls before they run.
+    expect(quiet.body.tool_calls.map((record) => record.name)).toEqual(['search_permits']);
     expect(quiet.body.leads_created).toEqual([]);
     expect(notAsked.repository.items.size).toBe(0);
 
@@ -269,6 +343,162 @@ describe('runTurn', () => {
     expect((await asked.repository.get(WORKSPACE, 'fx-1#FX-1 BP'))?.snapshot.permit?.basis).toBe(
       'saved',
     );
+  });
+
+  const COUNTY_WIDE = { ...PERMIT_ARGS, lat: undefined, lon: undefined };
+  const OFFER_QUESTION = 'Long-open roofing permits county-wide?';
+
+  it('saves on an explicit follow-up ask, as before: it searches again, then saves', async () => {
+    const { deps, repository, model } = setup([
+      call('t1', 'search_permits', COUNTY_WIDE),
+      call('t2', 'create_lead', { property_id: 'fx-1', permit_id: 'FX-1 BP' }),
+      text('OUTCOME: answered\n\nSaved [[permit:FX-1 BP]] as a lead.'),
+    ]);
+    const result = await runTurn(
+      deps,
+      input('Save the first as a lead', {
+        messages: [
+          { role: 'user', content: OFFER_QUESTION },
+          { role: 'assistant', content: 'Two match: [[permit:FX-1 BP]] and [[permit:FX-2 BP]].' },
+          { role: 'user', content: 'Save the first as a lead' },
+        ],
+      }),
+    );
+    if (result.kind !== 'response') throw new Error('expected a response');
+    expect(result.body.leads_created).toMatchObject([{ permit_id: 'FX-1 BP', outcome: 'created' }]);
+    expect(repository.items.get(WORKSPACE)?.size).toBe(1);
+    // An explicit ask is the one turn the model is offered create_lead.
+    const offered = model.doGenerateCalls[0]?.tools?.map((tool) => tool.name);
+    expect(offered).toContain('create_lead');
+  });
+
+  it('returns the cited records an answer offers to save, and never the SAVE_OFFER line', async () => {
+    const { deps, repository } = setup([
+      call('t1', 'search_permits', COUNTY_WIDE),
+      text(
+        'OUTCOME: answered\nSAVE_OFFER: [[permit:FX-1 BP]] [[property:fx-2]] [[permit:FX-2 BP]] [[property:fx-404]]\n\nTwo long-open permits: [[permit:FX-1 BP]] and [[property:fx-2]]. Save them with the button below.',
+      ),
+    ]);
+    const result = await runTurn(deps, input(OFFER_QUESTION));
+    if (result.kind !== 'response') throw new Error('expected a response');
+    // FX-2 BP was returned but not cited, fx-404 never returned: only cited records are offered.
+    expect(result.body.save_offer).toEqual([
+      { property_id: 'fx-1', permit_id: 'FX-1 BP' },
+      { property_id: 'fx-2', permit_id: '' },
+    ]);
+    expect(result.body.answer).toBe(
+      'Two long-open permits: [[permit:FX-1 BP]] and [[property:fx-2]]. Save them with the button below.',
+    );
+    expect(result.body.tool_calls.map((c) => c.name)).toEqual(['search_permits']);
+    expect(result.body.leads_created).toEqual([]);
+    expect(repository.items.size).toBe(0);
+    expect(result.stats).toMatchObject({ save_offer: 2, offer_dropped: false });
+  });
+
+  it('drops an offer when nothing in it survives, and says how to save instead', async () => {
+    const { deps } = setup([
+      call('t1', 'search_permits', COUNTY_WIDE),
+      text(
+        'OUTCOME: answered\nSAVE OFFER: [[property:fx-77]] [[permit:FX-2 BP]]\n\nOne: [[permit:FX-1 BP]]. Save it?',
+      ),
+    ]);
+    const result = await runTurn(deps, input(OFFER_QUESTION));
+    if (result.kind !== 'response') throw new Error('expected a response');
+    expect(result.body.save_offer).toEqual([]);
+    expect(result.body.answer).toBe('One: [[permit:FX-1 BP]]. Save it?');
+    expect(result.body.assumptions).toContain('To save these, say "save … as leads".');
+    expect(result.stats).toMatchObject({ save_offer: 0, offer_dropped: true });
+  });
+
+  it('offers nothing, and drops nothing, when the answer has no SAVE_OFFER line', async () => {
+    const { deps } = setup([
+      call('t1', 'search_permits', COUNTY_WIDE),
+      text('OUTCOME: answered\n\nOne: [[permit:FX-1 BP]].'),
+    ]);
+    const result = await runTurn(deps, input(OFFER_QUESTION));
+    if (result.kind !== 'response') throw new Error('expected a response');
+    expect(result.body.save_offer).toEqual([]);
+    expect(result.body.assumptions).not.toContain('To save these, say "save … as leads".');
+    expect(result.stats).toMatchObject({ save_offer: 0, offer_dropped: false });
+  });
+
+  it('saves nothing on a yes after an offer: a yes is not an explicit ask', async () => {
+    const { deps, repository, model } = setup([
+      call('t1', 'create_lead', { property_id: 'fx-1', permit_id: 'FX-1 BP' }),
+      text('OUTCOME: needs_clarification\n\nUse the Save button under the answer above.'),
+    ]);
+    const result = await runTurn(
+      deps,
+      input('yes', {
+        messages: [
+          { role: 'user', content: OFFER_QUESTION },
+          {
+            role: 'assistant',
+            content: 'One long-open permit: [[permit:FX-1 BP]]. Save it with the button below.',
+          },
+          { role: 'user', content: 'yes' },
+        ],
+      }),
+    );
+    if (result.kind !== 'response') throw new Error('expected a response');
+    expect(result.body.tool_calls).toEqual([]);
+    expect(result.body.leads_created).toEqual([]);
+    expect(repository.items.size).toBe(0);
+    // The model is not offered create_lead on a yes, so the SDK refuses the call above before it
+    // runs; the prompt says why, so the model points to the button.
+    const offered = model.doGenerateCalls[0]?.tools?.map((tool) => tool.name);
+    expect(offered).not.toContain('create_lead');
+    expect(offered).toContain('search_permits');
+    const system = model.doGenerateCalls[0]?.prompt.find((message) => message.role === 'system');
+    expect(system?.content).toContain('"yes", "ok" or "sure" is not an explicit ask');
+  });
+
+  it('answers a yes that cites an earlier record with a fixed pointer, never its own text', async () => {
+    const { deps } = setup([
+      text('OUTCOME: needs_clarification\n\nPress Save under [[permit:FX-1 BP]] to keep it.'),
+    ]);
+    const result = await runTurn(
+      deps,
+      input('yes', {
+        messages: [
+          { role: 'user', content: OFFER_QUESTION },
+          { role: 'assistant', content: 'One long-open permit: [[permit:FX-1 BP]].' },
+          { role: 'user', content: 'yes' },
+        ],
+      }),
+    );
+    if (result.kind !== 'response') throw new Error('expected a response');
+    expect(result.body.outcome).toBe('needs_clarification');
+    expect(result.body.answer).toMatch(/^To save records from an earlier answer, press the Save/);
+    expect(result.body.answer).not.toContain('[[');
+    expect(result.body.leads_created).toEqual([]);
+    expect(result.stats).toMatchObject({ citation_failures: 1 });
+  });
+
+  it('saves nothing on a yes to an answer that only mentions saving leads', async () => {
+    const { deps, repository } = setup([
+      call('t1', 'search_permits', COUNTY_WIDE),
+      call('t2', 'create_lead', { property_id: 'fx-1', permit_id: 'FX-1 BP' }),
+      text('OUTCOME: answered\n\nSaved [[permit:FX-1 BP]] as a lead.'),
+    ]);
+    const result = await runTurn(
+      deps,
+      input('yes', {
+        messages: [
+          { role: 'user', content: OFFER_QUESTION },
+          {
+            role: 'assistant',
+            content:
+              'Two permits match; no leads were saved. To save one, say "save … as a lead". Shall I widen the search?',
+          },
+          { role: 'user', content: 'yes' },
+        ],
+      }),
+    );
+    if (result.kind !== 'response') throw new Error('expected a response');
+    expect(result.body.tool_calls.map((record) => record.name)).toEqual(['search_permits']);
+    expect(result.body.leads_created).toEqual([]);
+    expect(repository.items.size).toBe(0);
   });
 
   it("lists the workspace's leads with the Leads page's filter and cites their properties", async () => {
