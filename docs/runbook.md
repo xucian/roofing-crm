@@ -63,7 +63,7 @@ The stack, all tagged `project_name=roofing-crm`, creates:
 - **CRM API (F3).** An HTTP API that CloudFront serves under `/api/*` (tRPC at `/api/trpc`), with route throttles and a
   90-day access log. The `leads` Lambda, with a 90-day log group. The DynamoDB table of leads, on demand with
   point-in-time recovery, retained if the stack is deleted.
-- **Alarms (F3).** One SNS topic and five alarms (`docs/metrics.md`).
+- **Alarms (F3, F5).** One SNS topic and nine alarms (`docs/metrics.md`).
 
 On the first deploy that adds IAM resources (F3: the function's role, its table grant and API Gateway's permission to
 invoke it), CDK lists them and asks: answer `y`.
@@ -75,11 +75,12 @@ template or the logs. Later deploys find the subscription and leave it alone.
 
 ## Deployed basemap
 
-- Built on 2026-10-17 into the git-ignored `basemap/` of the working tree, not deployed yet: Protomaps build 20261016
-  (tileset 4.15.2), box -98.2,29.99,-97.34,30.66, z0-15, sha256
+- Built on 2026-10-17 into the git-ignored `basemap/` of the working tree and deployed with the app: Protomaps build
+  20261016 (tileset 4.15.2), box -98.2,29.99,-97.34,30.66, z0-15, sha256
   9e5238651b55e1b7517c60f8ea3defe95aed4cbb81c2923bcfe7607cd8e348c8; glyphs and sprites from
-  protomaps/basemaps-assets@028c18f. `pnpm basemap --force` rebuilds from the newest daily build; replace this line
-  with the one it prints. After a deploy the same record is served at `<WebUrl>/basemap/SOURCE.json`.
+  protomaps/basemaps-assets@028c18f. The same record is served at
+  https://d2ymfvxnntp0j0.cloudfront.net/basemap/SOURCE.json (checked 2026-10-21). `pnpm basemap --force` rebuilds from
+  the newest daily build; replace this line with the one it prints.
 
 ## Local preview (no AWS)
 
@@ -148,7 +149,7 @@ secret also leaves the agent untraced. Chat answers either way.
 - **Daily budget.** 200 turns and 2,000,000 tokens per UTC day, then 503 `budget_exhausted` until 00:00 UTC. The count is
   the leads table item with `workspace_id` `#agent-usage` and `lead_key` the UTC date; deleting that item resets the day.
   The function's environment `AGENT_DAILY_TURNS` and `AGENT_DAILY_TOKENS` override the caps.
-- **Golden set.** `fixtures/agent/golden.json`, 10 cases (questions and expected tool calls, never prose). In-process, with
+- **Golden set.** `fixtures/agent/golden.json`, 13 cases (questions and expected tool calls, never prose). In-process, with
   the live pipeline and Bedrock (about $0.20 a run): the Bedrock provider reads the standard credential variables, so
   export the profile's first:
 

@@ -56,11 +56,11 @@ A pin at 30.2672, −97.7431 with the defaults (5 miles, roofs older than 15 yea
 GET {API_BASE}/v1/properties/search?lat=30.2672&lon=-97.7431&radius_miles=5&roof_age_min=15&open_permits=true&long_open_years=5&limit=500
 ```
 
-The answer `{items, total: 54173, next_cursor}` becomes 500 clustered markers, "54,173 matches, showing 500", and rows.
+The answer `{items, total: 54170, next_cursor}` becomes 500 clustered markers, "54,170 matches, showing 500", and rows.
 The first rows are the longest-open roofing permits, red. **Save lead** on property 103857 sends
 `POST /api/trpc/leads.create`. The function reads the pipeline and stores the lead with its snapshot: 802 BARTON BLVD,
 roof 18 years old, permit 1981-013092 BP open since 1981-10-23, contractor "Gary Pools", BBB blocked at source, run
-`20261018T143520Z-t5-full`. The lead is on the Leads page after a reload.
+`20261020T200236Z-t5-full`. The lead is on the Leads page after a reload.
 
 Asked "Show me open roofing permits older than five years within five miles of Austin", the agent:
 
