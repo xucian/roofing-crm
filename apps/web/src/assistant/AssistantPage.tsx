@@ -7,7 +7,7 @@ import {
   type ChatResponse,
   type GeoPoint,
 } from '@roofing-crm/shared';
-import { Fragment, useEffect, useState, type ReactNode } from 'react';
+import { Fragment, useEffect, useRef, useState, type ReactNode } from 'react';
 import { Callout } from '../app/Callout';
 import { CrmErrorDetails } from '../leads/CrmErrorDetails';
 import { EXAMPLES } from './examples';
@@ -49,6 +49,15 @@ const KIND_LABELS: Readonly<Record<ChatEvidence['kind'], string>> = {
  */
 export function AssistantPage({ chat, pin, onOpenProperty }: AssistantPageProps) {
   const [draft, setDraft] = useState('');
+  const transcriptRef = useRef<HTMLOListElement>(null);
+  const latest = chat.exchanges.at(-1);
+  const latestKey = latest ? `${String(latest.id)}:${latest.state.status}` : null;
+  // A new question, and then its answer, come into view with the question at the top: a short
+  // answer leaves the page at its end, a long one is read from its start.
+  useEffect(() => {
+    if (latestKey === null) return;
+    transcriptRef.current?.lastElementChild?.scrollIntoView({ block: 'start', behavior: 'smooth' });
+  }, [latestKey]);
   const submit = (question: string) => {
     if (question.trim() === '' || chat.pending) return;
     chat.ask(question, pin);
@@ -84,7 +93,7 @@ export function AssistantPage({ chat, pin, onOpenProperty }: AssistantPageProps)
           ))}
         </div>
       ) : (
-        <ol className="assistant-transcript">
+        <ol className="assistant-transcript" ref={transcriptRef}>
           {chat.exchanges.map((exchange) => (
             <Exchange key={exchange.id} exchange={exchange} onOpenProperty={onOpenProperty} />
           ))}

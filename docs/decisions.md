@@ -828,3 +828,17 @@ Accepted as they stand, recorded here:
 - **#25.** The `ToolLoopAgent` is built per turn, because its tools close over the turn. The model and the tracing
   facade are built once per instance.
 - **#26.** The response is a TypeScript interface, not a Zod schema; the web tests and the golden runner read it as typed.
+
+## 2026-10-21 — Pipeline run 2 served; no CRM change
+
+The pipeline published its incremental next run, `20261020T200236Z-t5-full` (pipeline decisions §33: 232 new and 3,662
+changed permits against run 1), and has served it since 2026-10-21 04:10Z. Checked on 2026-10-21; the CRM needed no change:
+
+- **Contract.** The served `/v1/openapi.json` still equals the pin (sha256 `7d8ece68…`); run 2 changed the data, not v1.
+- **Run id.** Nothing in the app or the agent names a run: the footer, the agent's run prompt, its answers and each new
+  lead's snapshot read it from `/v1/meta`. The README answers of the F5 check cite run 2.
+- **Leads.** A lead keeps the run of its snapshot, as decided for F3: the leads saved on 2026-10-20 show run
+  `20261018T143520Z-t5-full`, the two the agent saved on 2026-10-21 show run 2. The Leads filters read the snapshot, so a
+  run change never moves a lead between filters.
+- **Golden set.** Its expectations are tool calls, parameters, outcomes and the save rules, never counts, so run 2 needs no
+  new expectations: 13 of 13 against the URL on 2026-10-21, on run 2.

@@ -1325,6 +1325,7 @@ a.button {
 .assistant-exchange {
   display: grid;
   gap: 8px;
+  scroll-margin: 12px;
 }
 
 .assistant-question {

@@ -964,6 +964,30 @@ describe('F5: ask the assistant', () => {
     ]);
   });
 
+  it('scrolls the latest question and its answer into view', async () => {
+    window.history.replaceState(null, '', '/assistant');
+    stubPipeline(routes);
+    const scrolled: Element[] = [];
+    const scroll = vi.spyOn(Element.prototype, 'scrollIntoView').mockImplementation(function (
+      this: Element,
+    ) {
+      scrolled.push(this);
+    });
+    render(<App config={config} />);
+    const box = screen.getByRole('textbox', { name: 'Your question' });
+    await userEvent.type(box, 'Long-open permits near Austin?{Enter}');
+    await screen.findByText('Answered');
+    await userEvent.type(box, 'And older roofs?{Enter}');
+    await vi.waitFor(() => {
+      expect(screen.getAllByText('Answered')).toHaveLength(2);
+    });
+    const second = screen.getByText('And older roofs?').closest('li');
+    expect(second).not.toBeNull();
+    expect(scrolled.at(-1)).toBe(second);
+    expect(scroll).toHaveBeenLastCalledWith({ block: 'start', behavior: 'smooth' });
+    scroll.mockRestore();
+  });
+
   it('reads the leads again when a turn saved some', async () => {
     window.history.replaceState(null, '', '/assistant');
     stubPipeline(routes);
