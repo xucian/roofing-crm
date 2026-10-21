@@ -133,6 +133,19 @@ describe('createPipelineClient', () => {
     });
   });
 
+  it("sends property search's roof work classes comma-separated, as the contract says", async () => {
+    answer = { status: 200, body: EMPTY_SEARCH };
+    await client().searchProperties({
+      open_permits: true,
+      roof_work_class: ['primary_roof_replacement', 'repair_or_coating'],
+      limit: 500,
+    });
+    expect(seen[0]?.path).toBe('/v1/properties/search');
+    expect(seen[0]?.query.getAll('roof_work_class')).toEqual([
+      'primary_roof_replacement,repair_or_coating',
+    ]);
+  });
+
   it('searches permit text with its list parameter comma-separated (F5)', async () => {
     answer = { status: 200, body: EMPTY_SEARCH };
     const result = await client().searchPermitText({

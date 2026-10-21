@@ -3,7 +3,7 @@
   "repository": "https://github.com/xucian/oracle-property-intelligence-platform-pipeline-travis-tx",
   "apiBase": "https://733jzm4xv4.execute-api.us-east-2.amazonaws.com",
   "contractFrozenAt": "de08901",
-  "commit": "56b020c483d8197b15570275399e51ba512fca1d",
+  "commit": "031b720246b1e9fc45a55b35d03228de9044adcf",
   "path": "packages/contract/openapi.json",
-  "sha256": "7d8ece6832aa5f618c2d2bff0b68edad139700fbe37c8c1b58e7b9be75db48bc"
+  "sha256": "6ff17f6c4487fc66c7d3ec69936eeceb2342ac34db9f14aa8c938b631471b480"
 }

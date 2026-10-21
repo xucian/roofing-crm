@@ -92,8 +92,9 @@ export function SearchPanel({ search, dispatch, locating, onLocate, place }: Sea
           Open and stalled roofing permits
         </label>
         <p id="open-permits-hint" className="field-hint">
-          Also list properties with an open or expired-unfinished roofing permit, whatever the roof
-          age, longest open first. Open {PERMIT_SIGNAL.longOpenYears} years or more is long-open.
+          Also list properties with an open or expired-unfinished roof replacement or repair permit,
+          whatever the roof age, longest open first; sheds, garages and new construction are left
+          out. Open {PERMIT_SIGNAL.longOpenYears} years or more is long-open.
         </p>
       </div>
 

@@ -166,6 +166,7 @@ describe('App with the pipeline API', () => {
       roof_age_min: '15',
       open_permits: 'true',
       long_open_years: '5',
+      roof_work_class: 'primary_roof_replacement,repair_or_coating',
       limit: '500',
     });
   });

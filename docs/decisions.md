@@ -956,3 +956,24 @@ subscribes the `Alerts` topic over HTTPS once, passing the URL to the AWS CLI in
 Every alarm already notifies on ALARM and OK, so an incident opens and resolves itself. The email subscription stays as
 the second route. A clean clone without the parameter deploys as before and says the alarms email only
 (`docs/runbook.md`, "PagerDuty").
+
+## 2026-10-21 — Pipeline R1–R4 served; contract re-pinned at `031b720`; the list and the map are roof jobs
+
+The pipeline answered the CRM's letter with `031b720` (its decisions 36), served before this entry: a permit printed
+open or stalled with a completed date is served as closed, with `status_group_basis: completed_date`; property search
+takes `roof_work_class` for its permit signal; the API allows 50,000 calls a day; phones under 10 digits are null. The
+served `/v1/openapi.json` (sha256 `6ff17f6c…`) equals the committed file, so the pin moves from `56b020c` to `031b720`;
+the only contract changes are that parameter and the optional `status_group_basis`. Resolves the "Open" bullet of the
+roof-job entry above.
+
+- **Map and list.** With the permit toggle on, the map's property search sends `roof_work_class`
+  `primary_roof_replacement,repair_or_coating`, so the open, stalled and long-open reasons, the order, the marker colours
+  and the total follow roof jobs; aged-roof matches are unchanged. The toggle's hint says sheds, garages and new
+  construction are left out.
+- **Agent.** `search_properties` defaults to roof jobs when `open_permits` is true, as `search_permits` does; the model
+  may widen to every roofing class, and the server's assumption line states the classes used.
+- **Client.** Property search sends its list parameter comma-separated (form style, no explode), as permit search does.
+- **The review path moves.** At `15015e6`, ZIP 78745 at 3 miles listed 2106 SOUTHERN OAKS DR first. After the
+  pipeline's R1 it lists 3603 WILSON ST, and with roof jobs 4309 TRIBORO TRL, with no long-open roof job within 3 miles.
+  The default search (Austin, 5 miles) lists 3805 DUVAL ST first: repair permit 2018-062904 BP, open since 2018. The PR's
+  "How to review in two minutes" uses the default search.

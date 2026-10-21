@@ -92,40 +92,65 @@ const roofWorkClass = z.enum([
   'other',
   'needs_review',
 ]);
+/** The roofing set, in the contract's order: the classes property search's permit signal takes. */
+const roofingClass = z.enum([
+  'primary_roof_replacement',
+  'primary_roof_new_construction',
+  'repair_or_coating',
+  'accessory_roof',
+]);
 
 const INPUTS = {
   resolve_search_center: z.object({
     q: z.string().min(1).max(100).describe('City name, alias or ZIP.'),
   }),
-  search_properties: z.object({
-    lat,
-    lon,
-    radius_miles: radius,
-    roof_age_min: z
-      .int()
-      .min(0)
-      .default(15)
-      .describe('Strict: matches roof_age_years > roof_age_min. 0 omits the age clause.'),
-    open_permits: z
-      .boolean()
-      .describe(
-        'Required, no default: also match properties with an open or stalled roofing permit.',
-      ),
-    long_open_years: z
-      .number()
-      .positive()
-      .default(5)
-      .describe('Long-open threshold in years (open_duration_days >= long_open_years x 365).'),
-    owner_tenure_min: z
-      .number()
-      .min(0)
-      .optional()
-      .describe('Years since the deed date; narrows the match.'),
-    absentee_owner: z.boolean().optional().describe('Narrow to absentee owners.'),
-    out_of_area_owner: z.boolean().optional().describe('Narrow to out-of-area owners.'),
-    limit,
-    cursor,
-  }),
+  search_properties: z
+    .object({
+      lat,
+      lon,
+      radius_miles: radius,
+      roof_age_min: z
+        .int()
+        .min(0)
+        .default(15)
+        .describe('Strict: matches roof_age_years > roof_age_min. 0 omits the age clause.'),
+      open_permits: z
+        .boolean()
+        .describe(
+          'Required, no default: also match properties with an open or stalled roofing permit.',
+        ),
+      long_open_years: z
+        .number()
+        .positive()
+        .default(5)
+        .describe('Long-open threshold in years (open_duration_days >= long_open_years x 365).'),
+      roof_work_class: z
+        .array(roofingClass)
+        .min(1)
+        .optional()
+        .describe(
+          "The permit signal's classes. Left out when open_permits is true, roof jobs only: primary_roof_replacement and repair_or_coating. Every roofing class: primary_roof_replacement, primary_roof_new_construction, repair_or_coating, accessory_roof.",
+        ),
+      owner_tenure_min: z
+        .number()
+        .min(0)
+        .optional()
+        .describe('Years since the deed date; narrows the match.'),
+      absentee_owner: z.boolean().optional().describe('Narrow to absentee owners.'),
+      out_of_area_owner: z.boolean().optional().describe('Narrow to out-of-area owners.'),
+      limit,
+      cursor,
+    })
+    // The permit signal is roof jobs, as on the map, unless the model names classes (in the
+    // contract's order); without the permit signal the classes do not apply.
+    .transform(({ roof_work_class: named, ...input }) => ({
+      ...input,
+      roof_work_class: !input.open_permits
+        ? undefined
+        : named
+          ? roofingClass.options.filter((value) => named.includes(value))
+          : [...ROOF_JOB_CLASSES],
+    })),
   get_property: z.object({
     property_id: PropertyIdSchema.describe('TCAD PROP_ID as printed.'),
   }),
@@ -448,6 +473,7 @@ export function buildTurnTools(options: TurnToolsOptions) {
     },
     search_properties: async (input, callId) => {
       const { data } = await pipeline.searchProperties(input);
+      if (input.roof_work_class) used.roofWorkClasses.push(input.roof_work_class);
       evidence.addProperties(callId, data.items);
       return {
         result: projectPropertyPage(data),

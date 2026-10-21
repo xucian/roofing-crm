@@ -308,6 +308,39 @@ describe('runTurn', () => {
     expect(answered.body.center_used).toEqual({ name: "Map's pin", kind: 'map_pin', ...pin });
   });
 
+  it('searches properties by roof jobs when it asks for open permits, unless it names classes', async () => {
+    const jobs = setup([
+      call('t1', 'search_properties', { roof_age_min: 15, open_permits: true }),
+      text('OUTCOME: answered\n\nOne lead: [[property:fx-1]].'),
+    ]);
+    const result = await runTurn(jobs.deps, input('Roofing leads county-wide?'));
+    if (result.kind !== 'response') throw new Error('expected a response');
+    expect(jobs.calls.at(-1)).toContain(
+      'roof_work_class=primary_roof_replacement,repair_or_coating',
+    );
+    expect(
+      result.body.assumptions.some((line) => line.startsWith('Permits searched: roof jobs')),
+    ).toBe(true);
+
+    const named = setup([
+      call('t1', 'search_properties', {
+        roof_age_min: 0,
+        open_permits: true,
+        roof_work_class: ['accessory_roof', 'primary_roof_replacement'],
+      }),
+      text('OUTCOME: answered\n\nOne: [[property:fx-1]].'),
+    ]);
+    await runTurn(named.deps, input('Open roofing permits of every class, sheds too?'));
+    expect(named.calls.at(-1)).toContain('roof_work_class=primary_roof_replacement,accessory_roof');
+
+    const aged = setup([
+      call('t1', 'search_properties', { roof_age_min: 15, open_permits: false }),
+      text('OUTCOME: answered\n\nOne roof: [[property:fx-1]].'),
+    ]);
+    await runTurn(aged.deps, input('Roofs older than 15 years county-wide?'));
+    expect(aged.calls.at(-1)).not.toContain('roof_work_class');
+  });
+
   it('saves a lead only when asked, and only with an id a tool returned in this turn', async () => {
     const steps = [
       call('t1', 'search_permits', { ...PERMIT_ARGS, lat: undefined, lon: undefined }),

@@ -117,6 +117,8 @@ export function createPipelineClient(options: PipelineClientOptions): PipelineCl
       return answer(
         await client.GET('/v1/properties/search', {
           params: { query },
+          // `roof_work_class` is form style without explode, as on permit search.
+          querySerializer: { array: { style: 'form', explode: false } },
           signal: callOptions?.signal,
         }),
       );

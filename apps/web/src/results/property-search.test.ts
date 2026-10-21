@@ -20,7 +20,7 @@ function started(key = 'k1', run = 1): ResultsState {
 }
 
 describe('toPropertyQuery', () => {
-  it('asks for aged roofs or open and stalled roofing permits, 500 at a time (§4)', () => {
+  it('asks for aged roofs or open and stalled roof jobs, 500 at a time (§4)', () => {
     expect(toPropertyQuery(DEFAULT_SEARCH)).toEqual({
       lat: 30.2672,
       lon: -97.7431,
@@ -28,12 +28,15 @@ describe('toPropertyQuery', () => {
       roof_age_min: 15,
       open_permits: true,
       long_open_years: 5,
+      roof_work_class: ['primary_roof_replacement', 'repair_or_coating'],
       limit: 500,
     });
   });
 
   it('asks for aged roofs only when the permit toggle is off', () => {
-    expect(toPropertyQuery({ ...DEFAULT_SEARCH, openPermits: false }).open_permits).toBe(false);
+    const query = toPropertyQuery({ ...DEFAULT_SEARCH, openPermits: false });
+    expect(query.open_permits).toBe(false);
+    expect(query.roof_work_class).toBeUndefined();
   });
 
   it('keys equal queries equally', () => {
