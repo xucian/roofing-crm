@@ -3,7 +3,7 @@
 // are checked; the prose never is.
 //
 //   pnpm agent:golden                 in-process: the agent handler with the live pipeline and Bedrock
-//                                     (AWS credentials of the shell, e.g. AWS_PROFILE=cdk-lab), an
+//                                     (the AWS SDK's credential chain, e.g. AWS_PROFILE=cdk-lab), an
 //                                     in-memory leads table, no daily cap, LangSmith only if
 //                                     LANGSMITH_API_KEY is set
 //   pnpm agent:golden --url <WebUrl>  the deployed agent through CloudFront
@@ -31,6 +31,9 @@ interface GoldenCase {
   max_evidence?: Record<string, number>;
   max_tool_calls?: number;
   leads_created?: number;
+  leads_created_at_least?: number;
+  /** An earlier case whose question and answer come before this question. */
+  history_from?: string;
   center_kind?: string;
   answer_mentions?: string;
 }
@@ -101,6 +104,14 @@ export function check(expected: GoldenCase, answer: ChatResponse): string[] {
       problems.push(`${String(created)} leads created, expected ${String(expected.leads_created)}`);
     }
   }
+  if (expected.leads_created_at_least !== undefined) {
+    const saved = answer.leads_created.length;
+    if (saved < expected.leads_created_at_least) {
+      problems.push(
+        `${String(saved)} leads saved, expected >= ${String(expected.leads_created_at_least)}`,
+      );
+    }
+  }
   if (expected.center_kind && answer.center_used?.kind !== expected.center_kind) {
     problems.push(`center ${answer.center_used?.kind ?? 'none'}, expected ${expected.center_kind}`);
   }
@@ -168,14 +179,25 @@ async function main(): Promise<void> {
   const ask = values.url ? overHttp(values.url) : inProcess();
   const workspace = ulid();
   const rows: Record<string, unknown>[] = [];
+  const answers = new Map<string, { question: string; answer: string }>();
   let failed = 0;
   console.log(`Golden set: ${values.url ?? 'in-process'}, workspace ${workspace}`);
   for (const expected of golden.cases) {
     if (values.only && expected.id !== values.only) continue;
     const started = Date.now();
+    const before = expected.history_from ? answers.get(expected.history_from) : undefined;
+    const messages = [
+      ...(before
+        ? [
+            { role: 'user', content: before.question },
+            { role: 'assistant', content: before.answer },
+          ]
+        : []),
+      { role: 'user', content: expected.question },
+    ];
     const { status, body } = await ask({
       workspace_id: workspace,
-      messages: [{ role: 'user', content: expected.question }],
+      messages,
       map_center: golden.map_center,
     });
     const ms = Date.now() - started;
@@ -184,6 +206,8 @@ async function main(): Promise<void> {
       ? check(expected, answer)
       : [`HTTP ${String(status)}: ${JSON.stringify(body).slice(0, 300)}`];
     if (problems.length > 0) failed += 1;
+    if (answer?.answer)
+      answers.set(expected.id, { question: expected.question, answer: answer.answer });
     console.log(
       `${problems.length === 0 ? 'PASS' : 'FAIL'} ${expected.id} ${answer?.outcome ?? status} ${String(ms)} ms [${answer?.tool_calls.map((call) => call.name).join(' > ') ?? ''}] ${answer?.request_id ?? ''}`,
     );

@@ -15,9 +15,9 @@ import {
 } from './governor';
 import { CoordinateGuard } from './guard';
 import type { LangSmithFacade } from './langsmith';
-import { PROMPT_VERSION, parseFinalMessage, systemPrompt } from './prompt';
+import { PROMPT_VERSION, parseFinalMessage, pinInstruction, systemPrompt } from './prompt';
 import { sanitizeAnswer } from './sanitize';
-import { buildTurnTools, type ToolCallRecord } from './tools';
+import { asksToSaveLeads, buildTurnTools, type ToolCallRecord } from './tools';
 
 type WrappedModel = Parameters<typeof wrapLanguageModel>[0]['model'];
 
@@ -60,6 +60,10 @@ export interface TurnStats {
   leads_created: number;
   question_sha256: string;
   answer_sha256: string | null;
+  /** Why the model call failed: the error's name, HTTP status and message (never the user's text). */
+  model_error: string | null;
+  /** The first reasons the citation check withheld the answer (ids and kinds only). */
+  citation_failure_reasons: string[];
 }
 
 export type TurnResult =
@@ -99,6 +103,15 @@ const LIMIT_TEXT =
   'This turn reached its time or output limit before the answer was complete. The records found so far are listed below; ask again, or narrow the question.';
 const sha = (text: string) => createHash('sha256').update(text).digest('hex').slice(0, 16);
 
+/** A model failure for the log: its name, HTTP status and message, cut to 300 characters. */
+export function describeModelError(error: unknown): string {
+  const details = error as { name?: unknown; statusCode?: unknown; message?: unknown } | null;
+  const name = typeof details?.name === 'string' ? details.name : 'Error';
+  const status = typeof details?.statusCode === 'number' ? ` ${String(details.statusCode)}` : '';
+  const message = typeof details?.message === 'string' ? `: ${details.message}` : '';
+  return `${name}${status}${message}`.slice(0, 300);
+}
+
 function hasCause(error: unknown, type: new (...args: never[]) => Error): boolean {
   let current: unknown = error;
   for (let depth = 0; depth < 5 && current; depth += 1) {
@@ -127,6 +140,7 @@ export async function runTurn(deps: TurnDeps, input: TurnInput): Promise<TurnRes
     now,
   });
   const question = input.messages.at(-1)?.content ?? '';
+  // `failure` is set below when the model call throws; the stats read it.
   const evidence = new EvidenceCollector(meta.run.run_id);
   const guard = new CoordinateGuard(
     input.messages.filter((message) => message.role === 'user').map((message) => message.content),
@@ -139,7 +153,7 @@ export async function runTurn(deps: TurnDeps, input: TurnInput): Promise<TurnRes
     meta,
     evidence,
     guard,
-    question,
+    saveRequested: asksToSaveLeads(input.messages),
     remainingMs: () => budget.remainingMs(),
     log: deps.logToolCall ?? (() => undefined),
   });
@@ -147,7 +161,12 @@ export async function runTurn(deps: TurnDeps, input: TurnInput): Promise<TurnRes
   const Agent = deps.langsmith.ToolLoopAgent;
   const agent = new Agent({
     model: budget.wrap(deps.model),
-    instructions: systemPrompt(meta, input.mapCenter),
+    // Two system messages: the run prompt (the same for every turn of a run, so it carries the cache
+    // point) and the pin line, which changes with every pin (alakazam F5 review item 10).
+    instructions: [
+      { role: 'system', content: systemPrompt(meta) },
+      { role: 'system', content: pinInstruction(input.mapCenter) },
+    ],
     tools,
     stopWhen: isStepCount(limits.maxSteps),
     maxRetries: 0,
@@ -206,11 +225,12 @@ export async function runTurn(deps: TurnDeps, input: TurnInput): Promise<TurnRes
   }
 
   const totals = budget.totals();
+  const modelError = failure === null ? null : describeModelError(failure);
   const stats = (
     outcome: ChatOutcome,
     answer: string | null,
     cited = 0,
-    citationFailures = 0,
+    citationReasons: string[] = [],
   ): TurnStats => ({
     outcome,
     steps: totals.steps,
@@ -223,7 +243,7 @@ export async function runTurn(deps: TurnDeps, input: TurnInput): Promise<TurnRes
     model_ms: totals.modelMs,
     turn_ms: now() - input.receivedAt,
     deadline_hit: stoppedBy === 'deadline',
-    citation_failures: citationFailures,
+    citation_failures: citationReasons.length,
     bedrock_throttles: budget.throttles,
     retries: budget.retries,
     evidence: evidence.items.length,
@@ -231,6 +251,8 @@ export async function runTurn(deps: TurnDeps, input: TurnInput): Promise<TurnRes
     leads_created: leadsCreated.length,
     question_sha256: sha(question),
     answer_sha256: answer ? sha(answer) : null,
+    model_error: modelError,
+    citation_failure_reasons: citationReasons.slice(0, 3),
   });
 
   let bedrockFailure: BedrockFailure | null = null;
@@ -247,11 +269,11 @@ export async function runTurn(deps: TurnDeps, input: TurnInput): Promise<TurnRes
     answer: string,
     modelAssumptions: string[],
     cited = 0,
-    citationFailures = 0,
+    citationReasons: string[] = [],
   ): TurnResult => ({
     kind: 'response',
     bedrockFailure,
-    stats: stats(outcome, answer || null, cited, citationFailures),
+    stats: stats(outcome, answer || null, cited, citationReasons),
     body: {
       outcome,
       answer,
@@ -287,7 +309,15 @@ export async function runTurn(deps: TurnDeps, input: TurnInput): Promise<TurnRes
   if (!answer) return respond('tool_error', '', []);
   // The model's assumption lines are model text too: checked with the answer.
   const check = checkCitations([...modelAssumptions, answer].join('\n'), evidence);
-  if (!check.ok) return respond('tool_error', '', [], 0, check.failures.length);
+  if (!check.ok) {
+    return respond(
+      'tool_error',
+      '',
+      [],
+      0,
+      check.failures.map((item) => item.reason),
+    );
+  }
   const okCalls = records.filter((record) => record.status === 'ok').length;
   const asks = check.cited.length === 0 && answer.includes('?');
   let outcome: ChatOutcome =

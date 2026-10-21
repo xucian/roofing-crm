@@ -15,7 +15,25 @@ export interface CenterPoint extends SearchCenter {
 /** Rounding to four decimals (about 11 m) still counts as the returned point. */
 export const CENTER_TOLERANCE_DEG = 1e-4;
 
-const NUMBER = /[-+]?\d{1,3}\.\d+/g;
+/** A typed coordinate: an optional sign (U+2212 too), decimals, and an optional N, S, E or W. */
+const NUMBER = /([-+\u2212]?)(\d{1,3}\.\d+)\s*°?\s*([NSEW]\b)?/gi;
+
+/** The numbers a user typed: signed by their minus or their S/W, and both signs when unmarked. */
+export function typedNumbers(text: string): number[] {
+  const out: number[] = [];
+  for (const match of text.matchAll(NUMBER)) {
+    const value = Number(match[2]);
+    const hemisphere = (match[3] ?? '').toUpperCase();
+    if (match[1] === '-' || match[1] === '\u2212' || hemisphere === 'S' || hemisphere === 'W') {
+      out.push(-value);
+    } else if (match[1] === '+' || hemisphere === 'N' || hemisphere === 'E') {
+      out.push(value);
+    } else {
+      out.push(value, -value);
+    }
+  }
+  return out;
+}
 
 /** The map's pin as a center: what `center_used` reports when a search ran around it. */
 export const MAP_PIN = { name: "Map's pin", kind: 'map_pin' } as const;
@@ -32,7 +50,7 @@ export class CoordinateGuard {
     userTexts: string[],
     private readonly pin: GeoPoint | null,
   ) {
-    this.typed = userTexts.flatMap((text) => (text.match(NUMBER) ?? []).map(Number));
+    this.typed = userTexts.flatMap(typedNumbers);
   }
 
   /** Records what one resolve_search_center call returned; without an exact match, unconfirmed. */
@@ -64,8 +82,8 @@ export class CoordinateGuard {
       };
     }
     if (this.pin && near(this.pin)) return { ok: true, center: null, pin: true };
-    const typedLat = this.typed.some((n) => Math.abs(n - lat) < 1e-9);
-    const typedLon = this.typed.some((n) => Math.abs(n - lon) < 1e-9);
+    const typedLat = this.typed.some((n) => Math.abs(n - lat) <= CENTER_TOLERANCE_DEG);
+    const typedLon = this.typed.some((n) => Math.abs(n - lon) <= CENTER_TOLERANCE_DEG);
     if (typedLat && typedLon) return { ok: true, center: null, pin: false };
     return {
       ok: false,

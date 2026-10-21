@@ -47,6 +47,9 @@ export interface TurnBudgetOptions {
 
 export type BedrockFailure = 'throttled' | 'server_error' | 'denied' | 'other';
 
+/** A model step cut by the deadline counts against Bedrock only if it had this long (review item 13). */
+export const LONG_STEP_MS = 10_000;
+
 /** Classifies a Bedrock call failure: throttling and 5xx are retried once; access denial is `model_unavailable`. */
 export function classifyBedrockError(e: unknown): BedrockFailure {
   const err = (e ?? {}) as { statusCode?: number; name?: string; message?: string };
@@ -73,7 +76,7 @@ export class TurnBudget {
   retries = 0;
   throttles = 0;
   denials = 0;
-  /** Model calls cut by the deadline while running. */
+  /** Model calls cut by the deadline after starting with at least LONG_STEP_MS left: Bedrock hung. */
   modelTimeouts = 0;
   private readonly now: () => number;
   private readonly sleep: (ms: number) => Promise<void>;
@@ -119,6 +122,7 @@ export class TurnBudget {
             const signals = [AbortSignal.timeout(remaining)];
             if (params.abortSignal) signals.push(params.abortSignal);
             const t0 = this.now();
+            const startedWith = remaining;
             try {
               const r = await inner.doGenerate({
                 ...params,
@@ -139,7 +143,8 @@ export class TurnBudget {
               return r;
             } catch (e) {
               if (this.remainingMs() <= 0 || (e instanceof Error && e.name === 'TimeoutError')) {
-                this.modelTimeouts++;
+                // A step that started late (slow pipeline calls before it) is the deadline, not Bedrock.
+                if (startedWith >= LONG_STEP_MS) this.modelTimeouts++;
                 throw new DeadlineError();
               }
               const kind = classifyBedrockError(e);

@@ -4,8 +4,9 @@ import { CITABLE, type EvidenceCollector } from './evidence';
  * The citation check, as in the pipeline agent: every id the model writes must name a record a tool
  * returned in this turn, and every CID one a tool returned. That covers the `[[kind:id]]` tokens and
  * ids written outside them: bare Austin permit numbers, 32-hex contractor keys and "property <id>"
- * mentions. Anything else fails closed: the server returns no model text and `tool_error`. Run over
- * the answer and the model's assumption lines together.
+ * mentions. A bare id a lookup found missing may be named ("permit X is not in this dataset"), never
+ * cited as a token. Anything else fails closed: the server returns no model text and `tool_error`.
+ * Run over the answer and the model's assumption lines together.
  */
 export interface CitationCheck {
   ok: boolean;
@@ -50,18 +51,18 @@ export function checkCitations(text: string, evidence: EvidenceCollector): Citat
   const rest = text.replace(TOKEN, ' ');
   for (const match of rest.matchAll(BARE_PERMIT)) {
     const id = `${match[1] ?? ''} ${match[2] ?? ''}`;
-    if (!evidence.has('permit', id)) {
+    if (!evidence.mentionable('permit', id)) {
       failures.push({ token: match[0], reason: `no tool returned permit ${id} in this turn` });
     }
   }
   for (const match of rest.matchAll(HEX32)) {
-    if (!evidence.has('contractor', match[0])) {
+    if (!evidence.mentionable('contractor', match[0])) {
       failures.push({ token: match[0], reason: 'no tool returned this key in this turn' });
     }
   }
   for (const match of rest.matchAll(PROPERTY_MENTION)) {
     const id = match[1] ?? '';
-    if (!evidence.has('property', id)) {
+    if (!evidence.mentionable('property', id)) {
       failures.push({ token: match[0], reason: `no tool returned property ${id} in this turn` });
     }
   }

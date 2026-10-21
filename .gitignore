@@ -20,3 +20,6 @@ basemap/
 
 # Agent golden-set runs (pnpm agent:golden): answers to live questions, not committed
 fixtures/agent/results/
+
+# The PR description draft (kept local until the operator posts it)
+/pr-draft.md

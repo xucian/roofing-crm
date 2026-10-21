@@ -12,7 +12,13 @@ import { METRIC, type ChatFailureReason } from '../metric-names';
 import type { RequestMetrics } from '../observability';
 import { AgentUnavailable } from './errors';
 import type { CircuitBreaker } from './governor';
-import { PLAIN_FACADE, clearHistory, registerHistory, type LangSmithFacade } from './langsmith';
+import {
+  PLAIN_FACADE,
+  clearHistory,
+  registerHistory,
+  registerPin,
+  type LangSmithFacade,
+} from './langsmith';
 import type { ToolCallRecord } from './tools';
 import { TURN_LIMITS, runTurn, type TurnDeps, type TurnStats } from './turn';
 import { utcDay, type DailyUsage } from './usage';
@@ -66,13 +72,24 @@ async function within<T, F>(promise: Promise<T>, ms: number, fallback: F): Promi
 
 /** Free-text tool parameters are logged as hashes; ids, numbers and flags as given. */
 const HASHED_PARAMS = new Set(['q']);
+/**
+ * A search's point is never logged: it may be the map's pin, i.e. a GPS fix (alakazam F5 review
+ * item 6, as F4 keeps it out of "leads listed"). The radius stays.
+ */
+const POINT_PARAMS = new Set(['lat', 'lon']);
 export function logParams(args: Record<string, unknown>): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(args)) {
-    out[key] =
-      HASHED_PARAMS.has(key) && typeof value === 'string'
-        ? `sha256:${createHash('sha256').update(value).digest('hex').slice(0, 16)}`
-        : value;
+    if (POINT_PARAMS.has(key)) {
+      out[key] = '[point]';
+    } else if (key === 'within' && value && typeof value === 'object') {
+      out[key] = logParams(value as Record<string, unknown>);
+    } else {
+      out[key] =
+        HASHED_PARAMS.has(key) && typeof value === 'string'
+          ? `sha256:${createHash('sha256').update(value).digest('hex').slice(0, 16)}`
+          : value;
+    }
   }
   return out;
 }
@@ -133,6 +150,7 @@ export function createAgentService(deps: AgentServiceDeps): AgentService {
         }
 
         registerHistory(input.messages.slice(0, -1).map((message) => message.content));
+        registerPin(input.map_center ?? null);
         const result = await runTurn(
           {
             model: deps.model,

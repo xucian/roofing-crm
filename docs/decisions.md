@@ -773,3 +773,58 @@ earlier text, this entry wins.
     (§1, §8). The golden set replays live instead, before and after the deploy.
   - **A semantic retrieval leg and contractor search by name.** These stay as recorded on 2026-10-16.
   - **Streaming.** Not built: answers arrive whole, in 7 to 19 s.
+
+## 2026-10-21 — After the alakazam F5 review (`docs/reviews/2026-10-21-alakazam-f5.md`)
+
+The kit's `alakazam` agent reviewed the built agent, read-only: 26 findings, no blocker. The agent checked each finding
+against the code. Fixed before the operator's live check:
+
+- **Logged causes (#1).** A failed model call logs its cause (`model_error`: name, HTTP status, message) on the "chat
+  turn" line, with the first citation-check reasons.
+- **A clear miss (#2).** A 404 on `get_property`, `get_permit` or `get_contractor` is a successful "not found" result
+  (`found: false`), so an id outside the dataset ends as `no_matches`. The answer may name that id bare, never as a
+  citation token.
+- **Contractor names (#3).** The prompt says a question naming a contractor or company is not supported yet (outcome
+  `out_of_scope`), as decided on 2026-10-16, and offers an area search.
+- **The ask to save (#4).** The rule reads the conversation:
+  - a verb of saving pointing at leads or at the results ("save the first two", "add them to my leads");
+  - not negated ("don't save" refuses);
+  - or a "yes" to the assistant's own offer to save.
+- **One call at a time (#5).** The tool calls of a turn run one at a time, in the order made. The AI SDK runs a step's
+  calls together, which let parallel saves pass the cap of 5 and send the pipeline several calls at once.
+- **No point in the logs (#6).** The "chat tool call" line never logs a point (`lat`, `lon`, `within`'s point). The
+  traces replace the map pin's coordinates with "[map pin]", since the pin may be a GPS fix.
+- **Smaller fixes:**
+  - the current run is citable from the start of the turn (#7);
+  - typed coordinates accept a Unicode minus, N/S/E/W and the model's rounding (#8);
+  - an earlier message is hashed inside longer trace text only from 40 characters (#9);
+  - the pin is its own system message, after the cached run prompt (#10);
+  - a non-pipeline error inside a tool is recorded and returned, never thrown (#12);
+  - a deadline cut counts against Bedrock only when the model step started with 10 s or more (#13);
+  - the center assumption says "(those with coordinates)" (#15);
+  - the model takes the AWS SDK's credential chain, so `pnpm agent:golden` works with `AWS_PROFILE` alone (#19);
+  - the agent's DynamoDB client has 1 s and 2 s timeouts and 2 attempts (#20).
+- **Tests (#11, #18).** Unit tests for the save rule, the citation check, typed coordinates, the sanitizer, the trace
+  hiding, the log parameters, the prompt cache and the breaker; turn tests for parallel saves, a missing id and a logged
+  model error. The golden set gains a follow-up save, a contractor name and a missing permit: 13 cases, 13 of 13 in-process
+  on 2026-10-21.
+
+Accepted as they stand, recorded here:
+
+- **#14.** The daily count misses a step the deadline aborts, a turn that throws after a model call, and up to 5
+  concurrent turns past the check. It counts cache reads in full, so it errs high, and the bound holds.
+- **#16.** `get_property` takes `property_id` only; a `geo_id` lookup was not built.
+- **#17.** A saving turn reads `/v1/meta` twice (the turn, then the lead service): one fast call.
+- **#18, the rest.** An ambiguous-place case is not in the golden set. The workspace boundary is tested by the handler
+  tests.
+- **#21.** SAM local stays undone: there is no container runtime. The live replays stand instead: 10 of 10 against the
+  URL on 2026-10-21 (before these fixes) and 13 of 13 in-process after them.
+- **#22.** The F5 entry's reason is corrected. The 2026-10-16 entry planned recorded pipeline answers in a git-ignored
+  folder. They were not built, for time; the live replay replaces them.
+- **#23.** Item 11's `ConversationEventStore` interface was not built: with no login and client-held history it would
+  be dead code.
+- **#24, the layout half.** One flat `agent/` module mirrors the pipeline's `chat/`, which item 23 asked for. The
+  agent's environment is read without a Zod schema; recorded.
+- **#25.** The `ToolLoopAgent` is built per turn, because its tools close over the turn. The model and the tracing
+  facade are built once per instance.
+- **#26.** The response is a TypeScript interface, not a Zod schema; the web tests and the golden runner read it as typed.

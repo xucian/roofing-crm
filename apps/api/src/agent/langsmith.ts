@@ -35,6 +35,10 @@ const PERSON_KEYS = new Set(['owner_name', 'mailing_address', 'applicant']);
 
 /** The current turn's client-sent history, hidden in traces as hashes. One turn per instance. */
 const history = new Map<string, string>();
+/** An earlier message is also replaced inside longer text only from this length (review item 9). */
+const SUBSTRING_MIN = 40;
+/** The map's pin of the current turn (it may be a GPS fix): its coordinates never reach a trace. */
+let pin: { lat: number; lon: number } | null = null;
 
 export function registerHistory(contents: string[]): void {
   for (const content of contents) {
@@ -45,19 +49,35 @@ export function registerHistory(contents: string[]): void {
   }
 }
 
+export function registerPin(point: { lat: number; lon: number } | null): void {
+  pin = point;
+}
+
 export function clearHistory(): void {
   history.clear();
+  pin = null;
 }
+
+const nearPin = (value: number): boolean =>
+  pin !== null && (Math.abs(value - pin.lat) < 1e-4 || Math.abs(value - pin.lon) < 1e-4);
 
 /** Deep copy with the earlier messages replaced by their hashes and person fields hidden. */
 export function hideForTrace(value: unknown): unknown {
   if (typeof value === 'string') {
     let out = history.get(value) ?? value;
     for (const [content, label] of history) {
-      if (content !== value && out.includes(content)) out = out.split(content).join(label);
+      if (content.length >= SUBSTRING_MIN && content !== value && out.includes(content)) {
+        out = out.split(content).join(label);
+      }
+    }
+    if (pin) {
+      for (const coordinate of [String(pin.lat), String(pin.lon)]) {
+        out = out.split(coordinate).join('[map pin]');
+      }
     }
     return out;
   }
+  if (typeof value === 'number' && nearPin(value)) return '[map pin]';
   if (Array.isArray(value)) return value.map(hideForTrace);
   if (value && typeof value === 'object') {
     const out: Record<string, unknown> = {};

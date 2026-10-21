@@ -23,6 +23,7 @@
     "@aws-lambda-powertools/tracer": "^2.36.0",
     "@aws-sdk/client-dynamodb": "^3.1150.0",
     "@aws-sdk/client-secrets-manager": "^3.1151.0",
+    "@aws-sdk/credential-providers": "^3.1151.0",
     "@aws-sdk/lib-dynamodb": "^3.1150.0",
     "@middy/core": "^6.4.5",
     "@roofing-crm/pipeline-client": "workspace:*",

@@ -114,7 +114,13 @@ function productionDeps(): AgentHandlerDeps {
   if (deps) return deps;
   const config = readConfig();
   const modelId = process.env.BEDROCK_MODEL_ID ?? DEFAULT_MODEL_ID;
-  const dynamo = tracer.captureAWSv3Client(new DynamoDBClient({}));
+  // Bounded: the daily-budget update runs before the turn and must not eat its deadline (item 20).
+  const dynamo = tracer.captureAWSv3Client(
+    new DynamoDBClient({
+      maxAttempts: 2,
+      requestHandler: { connectionTimeout: 1000, requestTimeout: 2000 },
+    }),
+  );
   const doc = DynamoDBDocumentClient.from(dynamo, {
     marshallOptions: { removeUndefinedValues: true },
   });

@@ -207,9 +207,32 @@ const DESCRIPTIONS: Readonly<Record<keyof typeof INPUTS, string>> = {
 
 const GUARDED = new Set(['search_properties', 'search_permits', 'search_permit_text']);
 
-/** The latest message asks to save leads: a verb of saving and the word lead. */
-export function asksToSaveLeads(message: string): boolean {
-  return /\b(save|add|create|store|keep|track|put)\b/i.test(message) && /\blead/i.test(message);
+const SAVE_VERB = /\b(save|add|create|store|put|bookmark|track)\b/i;
+/** What a save points at: leads, the CRM, or the results ("them", "the first two", "both"). */
+const SAVE_OBJECT =
+  /\b(leads?|crm|them|these|those|it|this|that|all|both|each|first|second|third|top|last|\d+)\b/i;
+const NEGATED =
+  /\b(don'?t|do not|never|no need to|without|not)\s+(?:\w+\s+){0,3}?(save|add|create|store|put|bookmark|track)\b/i;
+const AFFIRMATIVE = /^\s*(yes|yep|yeah|sure|ok|okay|please(?: do)?|do it|go ahead|go for it)\b/i;
+
+/**
+ * Whether the user asked to save leads in the latest message: a verb of saving pointing at leads or
+ * at the results ("save the first two", "add them to my leads"), not negated; or a "yes" to the
+ * assistant's own offer to save them in the message before (alakazam F5 review item 4).
+ */
+export function asksToSaveLeads(messages: readonly { role: string; content: string }[]): boolean {
+  const latest = messages.at(-1);
+  if (latest?.role !== 'user') return false;
+  const text = latest.content;
+  if (NEGATED.test(text)) return false;
+  if (SAVE_VERB.test(text) && SAVE_OBJECT.test(text)) return true;
+  const offer = messages.at(-2);
+  return (
+    AFFIRMATIVE.test(text) &&
+    offer?.role === 'assistant' &&
+    /\bsave\b/i.test(offer.content) &&
+    /\blead/i.test(offer.content)
+  );
 }
 
 /** Drops a trailing Texas suffix ("Pflugerville, TX"): search centers are Travis County names. */
@@ -225,8 +248,8 @@ export interface TurnToolsOptions {
   meta: Meta;
   evidence: EvidenceCollector;
   guard: CoordinateGuard;
-  /** The latest user message (the explicit-ask rule of create_lead). */
-  question: string;
+  /** The latest message asks to save leads (asksToSaveLeads over the conversation). */
+  saveRequested: boolean;
   remainingMs: () => number;
   log: (record: ToolCallRecord) => void;
 }
@@ -245,7 +268,8 @@ interface Failure {
   request_id?: string | null;
 }
 
-function pipelineFailure(error: unknown): { status: ToolCallRecord['status']; result: Failure } {
+/** A failed call as the model sees it: never a throw, always with the pipeline's request id. */
+function callFailure(error: unknown): { status: ToolCallRecord['status']; result: Failure } {
   if (error instanceof DeadlineExceeded) {
     return { status: 'timeout', result: { error: 'timeout', detail: 'the turn ran out of time' } };
   }
@@ -271,8 +295,19 @@ function pipelineFailure(error: unknown): { status: ToolCallRecord['status']; re
       },
     };
   }
-  throw error;
+  // Anything else (a DynamoDB failure in a lead tool): recorded, never handed to the model raw.
+  return {
+    status: 'error',
+    result: {
+      error: 'internal',
+      detail: `the CRM could not complete this call (${error instanceof Error ? error.name : 'unknown'})`,
+    },
+  };
 }
+
+/** A pipeline 404 on a single-record read: the id is not in this dataset, a clear miss. */
+const isNotFound = (error: unknown): boolean =>
+  error instanceof PipelineError && error.kind === 'http' && error.status === 404;
 
 const pageSummary = (answer: { total: number; items: unknown[]; area_note?: string | null }) =>
   `${String(answer.total)} matches, ${String(answer.items.length)} returned${answer.area_note ? `; ${answer.area_note}` : ''}`;
@@ -296,6 +331,27 @@ export function buildTurnTools(options: TurnToolsOptions): TurnTools {
   const leadsCreated: ChatLeadCreated[] = [];
   const notes: string[] = [];
   const { pipeline, evidence, guard } = options;
+
+  /** A single-record read; a 404 is a clear miss (null), recorded so the answer may name the id. */
+  const lookup = async <T>(
+    kind: 'property' | 'permit' | 'contractor',
+    id: string,
+    call: () => Promise<T>,
+  ): Promise<T | null> => {
+    try {
+      return await call();
+    } catch (error) {
+      if (!isNotFound(error)) throw error;
+      evidence.addMissing(kind, id);
+      return null;
+    }
+  };
+  const missingRecord = (kind: string, id: string) => ({
+    result: { found: false, detail: `No ${kind} ${id} in this dataset (outcome no_matches).` },
+    summary: `not found: ${kind} ${id}`,
+    total: 0,
+    returned: 0,
+  });
 
   type Run = (
     input: Record<string, unknown>,
@@ -335,7 +391,10 @@ export function buildTurnTools(options: TurnToolsOptions): TurnTools {
       };
     },
     get_property: async (input, callId) => {
-      const { data } = await pipeline.getProperty(String(input.property_id));
+      const id = String(input.property_id);
+      const answer = await lookup('property', id, () => pipeline.getProperty(id));
+      if (!answer) return missingRecord('property', id);
+      const { data } = answer;
       const permits = propertyPermits(data.permits);
       evidence.addProperty(callId, data, permits);
       return {
@@ -368,7 +427,10 @@ export function buildTurnTools(options: TurnToolsOptions): TurnTools {
       };
     },
     get_permit: async (input, callId) => {
-      const { data } = await pipeline.getPermit(String(input.permit_id));
+      const id = String(input.permit_id);
+      const answer = await lookup('permit', id, () => pipeline.getPermit(id));
+      if (!answer) return missingRecord('permit', id);
+      const { data } = answer;
       evidence.addPermit(callId, data, data.property ?? null);
       return {
         result: projectPermit(data),
@@ -378,7 +440,10 @@ export function buildTurnTools(options: TurnToolsOptions): TurnTools {
       };
     },
     get_contractor: async (input, callId) => {
-      const { data } = await pipeline.getContractor(String(input.contractor_attribution_key));
+      const id = String(input.contractor_attribution_key);
+      const answer = await lookup('contractor', id, () => pipeline.getContractor(id));
+      if (!answer) return missingRecord('contractor', id);
+      const { data } = answer;
       evidence.addContractor(callId, data);
       return {
         result: projectContractor(data),
@@ -444,7 +509,7 @@ export function buildTurnTools(options: TurnToolsOptions): TurnTools {
       if (checked.pin) used.pin = true;
     }
     if (name === 'create_lead') {
-      if (!asksToSaveLeads(options.question)) {
+      if (!options.saveRequested) {
         return 'not_requested: save a lead only when the user explicitly asks to save in this message';
       }
       if (leadsCreated.length >= MAX_LEADS_PER_TURN) {
@@ -462,6 +527,16 @@ export function buildTurnTools(options: TurnToolsOptions): TurnTools {
     return null;
   };
 
+  // One call at a time, in the order the model made them (alakazam F5 review item 5): the AI SDK
+  // runs a step's calls together, but the pipeline's account takes one call at a time and the
+  // lead cap must see each save before the next.
+  let queue: Promise<unknown> = Promise.resolve();
+  const oneAtATime = <T>(task: () => Promise<T>): Promise<T> => {
+    const result = queue.then(task, task);
+    queue = result.catch(() => undefined);
+    return result;
+  };
+
   const tools: ToolSet = {};
   for (const name of Object.keys(INPUTS) as (keyof typeof INPUTS)[]) {
     // Each schema parses its own input; the shared execute below sees them as plain records.
@@ -469,48 +544,49 @@ export function buildTurnTools(options: TurnToolsOptions): TurnTools {
     tools[name] = tool({
       description: DESCRIPTIONS[name],
       inputSchema,
-      execute: async (input: Record<string, unknown>, { toolCallId }: { toolCallId: string }) => {
-        const started = performance.now();
-        const finish = (
-          status: ToolCallRecord['status'],
-          summary: string,
-          counts: { total: number | null; returned: number | null } = {
-            total: null,
-            returned: null,
-          },
-        ): void => {
-          const entry: ToolCallRecord = {
-            id: toolCallId,
-            name,
-            args: input,
-            status,
-            ...counts,
-            result_summary: summary,
-            ms: Math.round(performance.now() - started),
+      execute: (input: Record<string, unknown>, { toolCallId }: { toolCallId: string }) =>
+        oneAtATime(async () => {
+          const started = performance.now();
+          const finish = (
+            status: ToolCallRecord['status'],
+            summary: string,
+            counts: { total: number | null; returned: number | null } = {
+              total: null,
+              returned: null,
+            },
+          ): void => {
+            const entry: ToolCallRecord = {
+              id: toolCallId,
+              name,
+              args: input,
+              status,
+              ...counts,
+              result_summary: summary,
+              ms: Math.round(performance.now() - started),
+            };
+            records.push(entry);
+            options.log(entry);
           };
-          records.push(entry);
-          options.log(entry);
-        };
-        const refusal = refuse(name, input);
-        if (refusal !== null) {
-          finish('error', refusal);
-          return { error: refusal.slice(0, refusal.indexOf(':')), detail: refusal };
-        }
-        if (options.remainingMs() <= 0) {
-          finish('timeout', 'the turn deadline was reached before the call');
-          return { error: 'timeout', detail: 'the turn deadline was reached' };
-        }
-        try {
-          // Each tool adds its full records to the evidence; the model gets the projection.
-          const answer = await run[name](input, toolCallId);
-          finish('ok', answer.summary, { total: answer.total, returned: answer.returned });
-          return answer.result;
-        } catch (error) {
-          const failed = pipelineFailure(error);
-          finish(failed.status, `${failed.result.error}: ${failed.result.detail ?? ''}`);
-          return failed.result;
-        }
-      },
+          const refusal = refuse(name, input);
+          if (refusal !== null) {
+            finish('error', refusal);
+            return { error: refusal.slice(0, refusal.indexOf(':')), detail: refusal };
+          }
+          if (options.remainingMs() <= 0) {
+            finish('timeout', 'the turn deadline was reached before the call');
+            return { error: 'timeout', detail: 'the turn deadline was reached' };
+          }
+          try {
+            // Each tool adds its full records to the evidence; the model gets the projection.
+            const answer = await run[name](input, toolCallId);
+            finish('ok', answer.summary, { total: answer.total, returned: answer.returned });
+            return answer.result;
+          } catch (error) {
+            const failed = callFailure(error);
+            finish(failed.status, `${failed.result.error}: ${failed.result.detail ?? ''}`);
+            return failed.result;
+          }
+        }),
     });
   }
   return { tools, records, used, leadsCreated, notes };

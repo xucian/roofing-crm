@@ -70,14 +70,27 @@ export class EvidenceCollector {
   /** Properties named by a permit or a lead: citable, since a tool returned them in this turn. */
   private readonly namedProperties = new Set<string>();
   private readonly namedPermits = new Set<string>();
+  /** Ids a lookup found missing: the answer may name them (a clear miss), never cite them. */
+  private readonly missing = new Set<string>();
 
   constructor(private readonly runId: string) {}
 
   has(kind: ChatEvidenceKind, id: string): boolean {
     if (this.ids.get(kind)?.has(id)) return true;
+    // The turn read /v1/meta first, so the current run is known without get_run_summary.
+    if (kind === 'run') return id === this.runId;
     if (kind === 'property') return this.namedProperties.has(id);
     if (kind === 'permit') return this.namedPermits.has(id);
     return false;
+  }
+
+  /** Whether the answer may name the id: returned by a tool, or looked up and not found. */
+  mentionable(kind: ChatEvidenceKind, id: string): boolean {
+    return this.has(kind, id) || this.missing.has(`${kind}|${id}`);
+  }
+
+  addMissing(kind: ChatEvidenceKind, id: string): void {
+    this.missing.add(`${kind}|${id}`);
   }
 
   private push(item: ChatEvidence, id: string): void {
@@ -247,7 +260,7 @@ export function turnAssumptions(
     if (seen.has(key)) continue;
     seen.add(key);
     out.push(
-      `Search center ${center.name} (${center.kind}, ${center.match_type} match): ${center.parcel_count.toLocaleString('en-US')} parcels; ${center.basis}; distances are measured from that point.`,
+      `Search center ${center.name} (${center.kind}, ${center.match_type} match): ${center.parcel_count.toLocaleString('en-US')} parcels; ${center.basis} (those with coordinates); distances are measured from that point.`,
     );
   }
   if (used.pin && pin) {

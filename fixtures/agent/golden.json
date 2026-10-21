@@ -1,6 +1,9 @@
 {
-  "description": "Golden questions for pidgeot-agent (alakazam review item 7). Expectations are tool calls, their parameters, outcomes and the miss and save rules, never prose. Run with `pnpm agent:golden` (in-process, live pipeline and Bedrock) or `pnpm agent:golden --url <WebUrl>` (the deployed agent). Cases run in order in one workspace: the lead cases rely on the save case before them.",
-  "map_center": { "lat": 30.2672, "lon": -97.7431 },
+  "description": "Golden questions for pidgeot-agent (alakazam review item 7). Expectations are tool calls, their parameters, outcomes and the miss and save rules, never prose. Run with `pnpm agent:golden` (in-process, live pipeline and Bedrock) or `pnpm agent:golden --url <WebUrl>` (the deployed agent). Cases run in order in one workspace: the lead cases rely on the save cases before them, and `history_from` sends an earlier case's question and answer as the conversation before the question.",
+  "map_center": {
+    "lat": 30.2672,
+    "lon": -97.7431
+  },
   "cases": [
     {
       "id": "readme-open-permits",
@@ -8,10 +11,16 @@
       "outcomes": ["answered"],
       "tools_in_order": ["resolve_search_center", "search_permits"],
       "params": {
-        "search_permits": { "radius_miles": 5, "min_open_years": 5, "roofing_only": true }
+        "search_permits": {
+          "radius_miles": 5,
+          "min_open_years": 5,
+          "roofing_only": true
+        }
       },
       "forbid_tools": ["search_properties"],
-      "min_evidence": { "permit": 1 }
+      "min_evidence": {
+        "permit": 1
+      }
     },
     {
       "id": "aged-roofs-near-pin",
@@ -27,7 +36,9 @@
         }
       },
       "center_kind": "map_pin",
-      "min_evidence": { "property": 1 }
+      "min_evidence": {
+        "property": 1
+      }
     },
     {
       "id": "permit-text",
@@ -40,14 +51,24 @@
       "question": "Anywhere in the county, which absentee owners have owned their property more than 20 years?",
       "outcomes": ["answered", "no_matches"],
       "tools_in_order": ["search_properties"],
-      "params": { "search_properties": { "absentee_owner": true, "owner_tenure_min": 20 } },
-      "absent_params": { "search_properties": ["lat", "lon"] }
+      "params": {
+        "search_properties": {
+          "absentee_owner": true,
+          "owner_tenure_min": 20
+        }
+      },
+      "absent_params": {
+        "search_properties": ["lat", "lon"]
+      }
     },
     {
       "id": "out-of-county",
       "question": "Show me open roofing permits in Dallas",
       "outcomes": ["out_of_county", "no_matches"],
-      "max_evidence": { "permit": 0, "property": 0 }
+      "max_evidence": {
+        "permit": 0,
+        "property": 0
+      }
     },
     {
       "id": "off-topic",
@@ -70,11 +91,23 @@
       "leads_created": 2
     },
     {
+      "id": "save-follow-up",
+      "history_from": "no-save-without-ask",
+      "question": "Save the first two as leads",
+      "outcomes": ["answered"],
+      "tools_in_order": ["create_lead"],
+      "leads_created_at_least": 1
+    },
+    {
       "id": "list-leads",
       "question": "Which of my saved leads have a permit open more than 10 years?",
       "outcomes": ["answered", "no_matches"],
       "tools_in_order": ["list_leads"],
-      "params": { "list_leads": { "open_years_min": 10 } },
+      "params": {
+        "list_leads": {
+          "open_years_min": 10
+        }
+      },
       "forbid_tools": ["create_lead"]
     },
     {
@@ -83,6 +116,18 @@
       "outcomes": ["answered", "no_matches"],
       "tools_in_order": ["resolve_search_center", "search_permits"],
       "answer_mentions": "BBB"
+    },
+    {
+      "id": "contractor-by-name",
+      "question": "Show me open roofing permits by Gary Pools",
+      "outcomes": ["out_of_scope", "needs_clarification"],
+      "forbid_tools": ["create_lead"]
+    },
+    {
+      "id": "missing-permit",
+      "question": "Tell me about permit 1900-000000 BP",
+      "outcomes": ["no_matches"],
+      "tools_in_order": ["get_permit"]
     }
   ]
 }

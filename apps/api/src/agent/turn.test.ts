@@ -301,6 +301,67 @@ describe('runTurn', () => {
     );
   });
 
+  it('runs parallel tool calls one at a time, so the save cap holds', async () => {
+    const saves = Array.from({ length: 7 }, (_, n) => ({
+      type: 'tool-call' as const,
+      toolCallId: `c${String(n)}`,
+      toolName: 'create_lead',
+      input: JSON.stringify({ property_id: 'fx-1', permit_id: n === 0 ? '' : 'FX-1 BP' }),
+    }));
+    const { deps, calls } = setup([
+      call('t1', 'search_permits', { ...PERMIT_ARGS, lat: undefined, lon: undefined }),
+      {
+        content: saves,
+        finishReason: { unified: 'tool-calls' as const, raw: 'tool_use' },
+        usage: usage(60),
+        warnings: [],
+      },
+      text('OUTCOME: answered\n\nSaved [[permit:FX-1 BP]].'),
+    ]);
+    const result = await runTurn(deps, input('Save them all as leads'));
+    if (result.kind !== 'response') throw new Error('expected a response');
+    const statuses = result.body.tool_calls.slice(1).map((c) => c.result_summary.split(':')[0]);
+    expect(statuses.filter((s) => s === 'too_many')).toHaveLength(2);
+    expect(result.body.leads_created).toHaveLength(5);
+    // The pipeline saw no two calls at once: /v1/meta once for the saves, then one read per new lead.
+    expect(calls.filter((c) => c === '/v1/meta')).toHaveLength(1);
+  });
+
+  it('answers a missing id as a clear miss, naming it without a citation', async () => {
+    const { deps } = setup([
+      call('t1', 'get_permit', { permit_id: '1900-000000 BP' }),
+      text('OUTCOME: no_matches\n\nPermit 1900-000000 BP is not in this dataset.'),
+    ]);
+    const result = await runTurn(deps, input('Tell me about permit 1900-000000 BP'));
+    if (result.kind !== 'response') throw new Error('expected a response');
+    expect(result.body).toMatchObject({
+      outcome: 'no_matches',
+      answer: 'Permit 1900-000000 BP is not in this dataset.',
+    });
+    expect(result.body.tool_calls[0]).toMatchObject({
+      status: 'ok',
+      result_summary: 'not found: permit 1900-000000 BP',
+    });
+  });
+
+  it('logs why a model call failed', async () => {
+    const broken = Object.assign(new Error('Malformed input request'), {
+      name: 'ValidationException',
+      statusCode: 400,
+    });
+    const { deps } = setup([]);
+    const result = await runTurn(
+      {
+        ...deps,
+        model: new MockLanguageModelV4({ doGenerate: () => Promise.reject(broken) }),
+      },
+      input('Old roofs?'),
+    );
+    if (result.kind !== 'response') throw new Error('expected a response');
+    expect(result.body.outcome).toBe('tool_error');
+    expect(result.stats.model_error).toBe('ValidationException 400: Malformed input request');
+  });
+
   it('ends with limit_reached and the evidence so far when the deadline passes', async () => {
     const { deps } = setup([
       call('t1', 'search_properties', { roof_age_min: 15, open_permits: false }),
